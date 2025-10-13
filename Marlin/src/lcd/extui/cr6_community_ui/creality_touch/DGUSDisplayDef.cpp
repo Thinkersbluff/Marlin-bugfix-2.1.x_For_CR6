@@ -214,6 +214,22 @@ const uint16_t VPList_Leveling[] PROGMEM = {
   0x0000
 };
 
+const uint16_t VPList_Basic[] PROGMEM = {
+
+  VP_T_E0_Is,
+  VP_T_E0_Set,
+  VP_T_Bed_Is,
+  VP_T_Bed_Set,
+
+  // Include busy/throbber and back-button state so the INFOBOX
+  // screen (which uses VPList_Basic) can be updated to show a
+  // throbber when the firmware marks a synchronous operation.
+  VP_BACK_BUTTON_STATE,
+  VP_BUSY_ANIM_STATE,
+
+  0x0000
+};
+
 const uint16_t VPList_ZOffsetLevel[] PROGMEM = {
   VPList_CommonWithStatus,
 
@@ -443,7 +459,6 @@ const struct VPMapping VPMap[] PROGMEM = {
   { DGUSLCD_SCREEN_TEMP_PLA, VPList_PreheatPLASettings },
   { DGUSLCD_SCREEN_TEMP_ABS, VPList_PreheatABSSettings },
 
-  { DGUSLCD_SCREEN_INFO, VPList_PrintScreen },
   { DGUSLCD_SCREEN_ZOFFSET_LEVEL, VPList_ZOffsetLevel },
   { DGUSLCD_SCREEN_LEVELING, VPList_Leveling },
 
@@ -457,6 +472,7 @@ const struct VPMapping VPMap[] PROGMEM = {
   { DGUSLCD_SCREEN_DIALOG_PAUSE, VPList_None },
   { DGUSLCD_SCREEN_DIALOG_STOP, VPList_DialogStop },
 
+  { DGUSLCD_SCREEN_INFOBOX, VPList_Basic },
   { DGUSLCD_SCREEN_CONFIRM, VPList_None },
   { DGUSLCD_SCREEN_POPUP, VPList_None },
 
@@ -603,19 +619,16 @@ const struct DGUS_VP_Variable ListOfVP[] PROGMEM = {
 
   // Preheat settings
   #ifdef PREHEAT_1_LABEL
-  // The original implementation exposed internal material_preset storage directly.
-  // Replace direct-address usage with no direct storage (nullptr) and rely on
-  // the send callback to query the preheat getters so the UI doesn't depend
-  // on MarlinUI internals.
-  VPHELPER(VP_PREHEAT_PLA_HOTEND_TEMP, nullptr, ScreenHandler.DGUSLCD_SetValueDirectly<int16_t>, &ScreenHandler.DGUSLCD_SendWordValueToDisplay),
-  VPHELPER(VP_PREHEAT_PLA_BED_TEMP, nullptr, ScreenHandler.DGUSLCD_SetValueDirectly<int16_t>, &ScreenHandler.DGUSLCD_SendWordValueToDisplay),
+  // Preheat material preset temperatures - use custom handlers to interface with ui.material_preset
+  VPHELPER(VP_PREHEAT_PLA_HOTEND_TEMP, nullptr, ScreenHandler.HandleMaterialPreheatPreset, ScreenHandler.DGUSLCD_SendMaterialPreheatPresetToDisplay),
+  VPHELPER(VP_PREHEAT_PLA_BED_TEMP, nullptr, ScreenHandler.HandleMaterialPreheatPreset, ScreenHandler.DGUSLCD_SendMaterialPreheatPresetToDisplay),
   #endif
 
   #ifdef PREHEAT_2_LABEL
   // Some Marlin configurations only define a single PREHEAT preset. Guard access to preset index 1.
 #if PREHEAT_COUNT > 1
-  VPHELPER(VP_PREHEAT_ABS_HOTEND_TEMP, nullptr, ScreenHandler.DGUSLCD_SetValueDirectly<int16_t>, &ScreenHandler.DGUSLCD_SendWordValueToDisplay),
-  VPHELPER(VP_PREHEAT_ABS_BED_TEMP, nullptr, ScreenHandler.DGUSLCD_SetValueDirectly<int16_t>, &ScreenHandler.DGUSLCD_SendWordValueToDisplay),
+  VPHELPER(VP_PREHEAT_ABS_HOTEND_TEMP, nullptr, ScreenHandler.HandleMaterialPreheatPreset, ScreenHandler.DGUSLCD_SendMaterialPreheatPresetToDisplay),
+  VPHELPER(VP_PREHEAT_ABS_BED_TEMP, nullptr, ScreenHandler.HandleMaterialPreheatPreset, ScreenHandler.DGUSLCD_SendMaterialPreheatPresetToDisplay),
 #endif
   #endif
 
@@ -803,7 +816,7 @@ const struct DGUS_VP_Variable ListOfVP[] PROGMEM = {
   { .VP = VP_MSGSTR1, .memadr = nullptr, .size = VP_MSGSTR1_LEN, .set_by_display_handler = nullptr, .send_to_display_handler = &ScreenHandler.DGUSLCD_SendStringToDisplayPGM },
   { .VP = VP_MSGSTR2, .memadr = nullptr, .size = VP_MSGSTR2_LEN, .set_by_display_handler = nullptr, .send_to_display_handler = &ScreenHandler.DGUSLCD_SendStringToDisplayPGM },
   { .VP = VP_MSGSTR3, .memadr = nullptr, .size = VP_MSGSTR3_LEN, .set_by_display_handler = nullptr, .send_to_display_handler = &ScreenHandler.DGUSLCD_SendStringToDisplayPGM },
-  //{ .VP = VP_MSGSTR4, .memadr = nullptr, .size = VP_MSGSTR4_LEN, .set_by_display_handler = nullptr, .send_to_display_handler = &ScreenHandler.DGUSLCD_SendStringToDisplayPGM },
+  { .VP = VP_MSGSTR4, .memadr = nullptr, .size = VP_MSGSTR4_LEN, .set_by_display_handler = nullptr, .send_to_display_handler = &ScreenHandler.DGUSLCD_SendStringToDisplayPGM },
 
   VPHELPER(0, 0, 0, 0)  // must be last entry.
 };

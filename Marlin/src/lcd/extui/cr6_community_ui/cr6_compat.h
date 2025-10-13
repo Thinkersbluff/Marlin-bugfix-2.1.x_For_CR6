@@ -7,6 +7,9 @@
 // Ensure ExtUI declarations available for shims
 #include "../ui_api.h"
 
+// Use size_t for loop counters when iterating over sizeof() results
+#include <stddef.h>
+
 // Some builds expect DEBUG_ECHOLNPAIR/DEBUG_ECHOLNPAIR_F to exist.
 #ifndef DEBUG_ECHOLNPAIR
   #define DEBUG_ECHOLNPAIR(...) DEBUG_ECHOLN(__VA_ARGS__)
@@ -35,8 +38,10 @@
 #endif
 
 // Provide LOOP_L_N macro used for byte-wise loops if missing
+// Use size_t for the index and cast N to size_t to avoid signed/unsigned
+// comparison warnings when N comes from sizeof() or other size_t expressions.
 #ifndef LOOP_L_N
-  #define LOOP_L_N(I,N) for (int I = 0; I < (N); ++I)
+#  define LOOP_L_N(I,N) for (size_t I = 0; I < (size_t)(N); ++I)
 #endif
 
 // EITHER macro is an alias to ANY for preprocessor expressions

@@ -1,5 +1,4 @@
 #include "../../../../inc/MarlinConfigPre.h"
-
 #if ENABLED(DGUS_LCD_UI_CR6_COMM)
 
 #include "../DGUSDisplayDef.h"
@@ -88,34 +87,56 @@ void FilamentLoadUnloadHandler::ChangeFilamentWithTemperature(PGM_P command) {
         thermalManager.wait_for_hotend(ExtUI::H0, false);
     }
 
-    // Inject load filament command
+    // Perform the actual filament change operation directly instead of
+    // injecting M701/M702 strings. This keeps behavior local and lets the
+    // UI-controlled `length` parameter be used for both touchscreen and
+    // programmatic flows.
     SetStatusMessage(PSTR("Filament load/unload..."));
 
     // Ensure length has a reasonable default value
     if (length < 1.0f) length = 150.0f;
 
-    char cmd[64];
-    // Build command string directly instead of using sprintf_P with format string
-    char lengthStr[16];
-    dtostrf(length, 1, 1, lengthStr);  // Convert float to string with 1 decimal place
-    
+    // Decide whether to load or unload based on the provided command
     if (strstr_P(command, PSTR("M701"))) {
-        snprintf_P(cmd, sizeof(cmd), PSTR("M701 L%s P0"), lengthStr);
-    } else if (strstr_P(command, PSTR("M702"))) {
-        snprintf_P(cmd, sizeof(cmd), PSTR("M702 U%s"), lengthStr);
-    } else {
-        strcpy_P(cmd, command);  // Fallback to original command
+        // load_filament(slow_load_length, fast_load_length, purge_length, ...)
+        const float slow_load_length = FILAMENT_CHANGE_SLOW_LOAD_LENGTH;
+        const float fast_load_length = ABS(length);
+        const float purge_length = length; // use handler length for purge
+
+        SERIAL_ECHOPAIR("load_filament: slow=", slow_load_length);
+        SERIAL_ECHOPAIR(" fast=", fast_load_length);
+        SERIAL_ECHOPAIR(" purge=", purge_length);
+        SERIAL_ECHOPGM("\n");
+
+        load_filament(
+            slow_load_length, fast_load_length, purge_length,
+            FILAMENT_CHANGE_ALERT_BEEPS,
+            true,                                           // show_lcd
+            thermalManager.still_heating(ExtUI::E0),        // pause_for_user
+            PAUSE_MODE_LOAD_FILAMENT                        // pause_mode
+            OPTARG(DUAL_X_CARRIAGE, 0)                      // Dual X target (0 for default)
+        );
+        // Ensure any temporary status/infobox is cleared and the UI returns to the Feed screen
+        ScreenHandler.setstatusmessagePGM(nullptr);
+        ScreenHandler.PopToOldScreen();
     }
-    
-    // Handle commands
-    SERIAL_ECHOPAIR("Injecting command: ", cmd);
-    SERIAL_ECHOPAIR(" (length=", length);
-    SERIAL_ECHOPGM(")");
-    GcodeSuite::process_subcommands_now(cmd);
+    else if (strstr_P(command, PSTR("M702"))) {
+        // For unload, call unload_filament with negative length
+        const float unload_length = -ABS(length);
+
+    SERIAL_ECHOPAIR("unload_filament: length=", unload_length);
+    SERIAL_ECHOPGM("\n");
+    unload_filament(unload_length, true, PAUSE_MODE_UNLOAD_FILAMENT);
+    // Ensure any temporary status/infobox is cleared and the UI returns to the Feed screen
+    ScreenHandler.setstatusmessagePGM(nullptr);
+    ScreenHandler.PopToOldScreen();
+    }
+
     SERIAL_ECHOPGM_P("- done");
 
     if (ScreenHandler.Settings.display_sound) ScreenHandler.Buzzer(500, 100);
-    SetStatusMessage(PSTR("Filament load/unload complete"));
+    // Show a transient completion message and let the screen handler clear it automatically
+    DGUSScreenHandler::PostDelayedStatusMessage_P(PSTR("Filament load/unload complete"), 10 /*ms delay before showing*/);
 }
 
 void FilamentLoadUnloadHandler::SetStatusMessage(PGM_P statusMessage) {

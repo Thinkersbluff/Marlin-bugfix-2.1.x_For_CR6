@@ -28,6 +28,12 @@
 // CR6 compat shims
 #include "cr6_compat.h"
 
+// Compile-time switch: enable or disable synchronous-operation handling
+// (affects busy/throbber state and some input handlers). Default: enabled.
+#ifndef DGUS_SYNCH_OPS_ENABLED
+#define DGUS_SYNCH_OPS_ENABLED 1
+#endif
+
 #if HAS_COLOR_LEDS
   #include "../../../feature/leds/leds.h"
 
@@ -92,6 +98,9 @@ public:
   static void setstatusmessage(const char* msg);
   /// The same for messages from Flash
   static void setstatusmessagePGM(PGM_P const msg);
+
+  // Control whether popup buttons map to pause responses. See SetSuppressPopupPauseResponse
+  static void SetSuppressPopupPauseResponse(bool suppress);
 
   // Callback for VP "Display wants to change screen on idle printer"
   static void ScreenChangeHookIfIdle(DGUS_VP_Variable &var, void *val_ptr);
@@ -183,6 +192,10 @@ public:
     // Hook for preheat
     static void HandlePreheat(DGUS_VP_Variable &var, void *val_ptr);
   #endif
+
+  // Hooks for preheat material preset temperatures
+  static void HandleMaterialPreheatPreset(DGUS_VP_Variable &var, void *val_ptr);
+  static void DGUSLCD_SendMaterialPreheatPresetToDisplay(DGUS_VP_Variable &var);
   #if ENABLED(DGUS_FILAMENT_LOADUNLOAD)
     // Hook for filament load and unload filament option
     static void HandleFilamentOption(DGUS_VP_Variable &var, void *val_ptr);
@@ -230,6 +243,25 @@ static void Buzzer(const uint16_t frequency, const uint16_t duration);
   static void OnHomingStart();
   static void OnHomingComplete();
   static void OnPrintFinished();
+
+  // Helpers for purge flows: start/finish a synchronous UI operation which
+  // enables the busy throbber and disables certain interactive controls.
+#if DGUS_SYNCH_OPS_ENABLED
+  static void BeginPurgeOperation();
+  static void EndPurgeOperation();
+#else
+  // No-ops when synchronous ops are disabled at compile time
+  static void BeginPurgeOperation() { }
+  static void EndPurgeOperation() { }
+#endif
+
+  /**
+   * Post a status message after a delay (non-blocking).
+   * msg: pointer to a RAM string (must remain valid until message posted) or use PostDelayedStatusMessage_P for flash strings.
+   */
+  static void PostDelayedStatusMessage(const char* msg, uint32_t delay_ms);
+  /// Post a PROGMEM (flash) status message after a delay.
+  static void PostDelayedStatusMessage_P(PGM_P msg, uint32_t delay_ms);
 
   // OK Button the Confirm screen.
   static void ScreenConfirmedOK(DGUS_VP_Variable &var, void *val_ptr);
@@ -417,8 +449,13 @@ static void Buzzer(const uint16_t frequency, const uint16_t duration);
 
   static bool HandlePendingUserConfirmation();
 
+#if DGUS_SYNCH_OPS_ENABLED
   static void SetSynchronousOperationStart();
   static void SetSynchronousOperationFinish();
+#else
+  static void SetSynchronousOperationStart() { }
+  static void SetSynchronousOperationFinish() { }
+#endif
   static bool HasCurrentSynchronousOperation() { return HasSynchronousOperation; }
   static void SendBusyState(DGUS_VP_Variable &var);
 
@@ -438,12 +475,22 @@ private:
   static bool ScreenComplete;   ///< All VPs sent to screen?
 
   static uint16_t ConfirmVP;    ///< context for confirm screen (VP that will be emulated-sent on "OK").
+  // When true the popup's Continue/other buttons will NOT be mapped into
+  // PauseMenuResponse values. Used for transient popups (e.g. heater-timeout)
+  // where pressing Continue should only release the wait and let Marlin
+  // proceed with its reheat flow instead of signaling Resume/Purge.
+  static bool suppress_popup_pause_response;
 
   static uint8_t MeshLevelIndex;
   static uint8_t MeshLevelIconIndex;
   static bool SaveSettingsRequested;
   static bool HasScreenVersionMismatch;
+#if DGUS_SYNCH_OPS_ENABLED
   static bool HasSynchronousOperation;
+#else
+  // When synchronous ops are disabled, this is always false.
+  static bool HasSynchronousOperation;
+#endif
 
   #if ENABLED(SDSUPPORT)
     static int16_t top_file;    ///< file on top of file chooser
@@ -474,17 +521,18 @@ struct DGUSSynchronousOperation {
 
     void start() { 
       is_running = true; 
-      ScreenHandler.SetSynchronousOperationStart();
+      // Start a synchronous operation and ensure the busy indicator is sent immediately
+      ScreenHandler.BeginPurgeOperation();
     }
 
     void done() {
       is_running = false; 
-      ScreenHandler.SetSynchronousOperationFinish();
+      ScreenHandler.EndPurgeOperation();
     }
 
     ~DGUSSynchronousOperation() { 
       if (is_running) { 
-        ScreenHandler.SetSynchronousOperationFinish();
+        ScreenHandler.EndPurgeOperation();
       }
     }
 };

@@ -175,6 +175,8 @@ namespace ExtUI {
     if (!flags.printer_killed) thermalManager.task();
   }
 
+
+
   #if ENABLED(JOYSTICK)
     /**
      * Jogs in the direction given by the vector (dx, dy, dz).

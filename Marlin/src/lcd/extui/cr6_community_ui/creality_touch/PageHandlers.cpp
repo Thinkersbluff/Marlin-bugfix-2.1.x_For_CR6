@@ -26,6 +26,45 @@
 
 // Definitions of page handlers
 
+// Local storage for CR6-specific interrupted blocking-heating state.
+static bool cr6_stored_blocking_wait = false;
+static celsius_t cr6_stored_hotend_target = 0;
+#if HAS_HEATED_BED
+static celsius_t cr6_stored_bed_target = 0;
+#endif
+
+static void store_blocking_heating_cr6() {
+    extern bool wait_for_heatup; // from MarlinCore.h
+    cr6_stored_blocking_wait = wait_for_heatup;
+    cr6_stored_hotend_target = thermalManager.degTargetHotend(0);
+#if HAS_HEATED_BED
+    cr6_stored_bed_target = thermalManager.degTargetBed();
+#endif
+}
+
+static void restore_blocking_heating_cr6() {
+    if (!cr6_stored_blocking_wait) return;
+        char buf[32];
+        if (cr6_stored_hotend_target > 0) {
+            snprintf(buf, sizeof(buf), "M104 S%u", (uint16_t)cr6_stored_hotend_target);
+            ExtUI::injectCommands(buf);
+        }
+#if HAS_HEATED_BED
+        if (cr6_stored_bed_target > 0) {
+            snprintf(buf, sizeof(buf), "M140 S%u", (uint16_t)cr6_stored_bed_target);
+            ExtUI::injectCommands(buf);
+        }
+#endif
+    cr6_stored_blocking_wait = false;
+    cr6_stored_hotend_target = 0;
+#if HAS_HEATED_BED
+    cr6_stored_bed_target = 0;
+#endif
+}
+
+// (Previous logic used an accidental-confirm ignore flag here; it was
+// removed per request.)
+
 void MainMenuHandler(DGUS_VP_Variable &var, unsigned short buttonValue) {
     switch (var.VP) {
         case VP_BUTTON_MAINENTERKEY:
@@ -286,14 +325,13 @@ void PrintPausedMenuHandler(DGUS_VP_Variable &var, unsigned short buttonValue) {
     switch (var.VP) {
         case VP_BUTTON_RESUMEPRINTKEY:
 #if ENABLED(FILAMENT_RUNOUT_SENSOR)
-            runout.reset();
+                        runout.reset();
 #endif
-
-            if (!ScreenHandler.HandlePendingUserConfirmation()) {
-                ExtUI::resumePrint();
-                ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING);
-            }
-            break;
+            // Mirror Pause/Stop: show a small confirmation dialog before
+            // actually resuming. The user's response on that dialog will
+            // perform the pause-handshake or resume command.
+            ScreenHandler.GotoScreen(DGUSLCD_SCREEN_DIALOG_RESUME);
+        break;
 
         case VP_BUTTON_ADJUSTENTERKEY:
             ScreenHandler.GotoScreen(DGUSLCD_SCREEN_TUNING);
@@ -310,13 +348,63 @@ void PrintPauseDialogHandler(DGUS_VP_Variable &var, unsigned short buttonValue) 
         case VP_BUTTON_PAUSEPRINTKEY:
             switch (buttonValue) {
                 case 2:
-                    ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING);
+                    // User confirmed Pause: we will cancel any blocking waits
+                    // (M109/M190/M0 etc.) by issuing an M108. Save the current
+                    // blocking-heating state locally so we can restore targets
+                    // later from the same UI module without modifying global API.
+                    store_blocking_heating_cr6();
+                    ExtUI::injectCommands(F("M108")); // break wait loops
+
+                    ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_PAUSED);
                     ScreenHandler.setstatusmessagePGM(PSTR("Pausing print - please wait..."));
                     ExtUI::pausePrint();
+
                     break;
 
                 case 3:
+                    // User chose to NOT pause: return to the Print Running screen
                     ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING);
+                break;
+            }
+            break;
+    }
+}
+
+// Handler for the small Resume confirmation dialog. Mirrors the Pause
+// dialog pattern: case 2 confirms (perform resume/handshake), case 3
+// cancels and returns the user to the paused screen.
+void PrintResumeDialogHandler(DGUS_VP_Variable &var, unsigned short buttonValue) {
+    switch (var.VP){
+        case VP_BUTTON_RESUMEPRINTKEY:
+            switch (buttonValue) {
+                case 2:
+                    // User confirmed Resume: perform the same logic previously
+                    // located on the paused-screen resume button. For Advanced
+                    // Pause flows this sets the response and clears the wait;
+                    // otherwise it directly resumes.
+                    #if ENABLED(FILAMENT_RUNOUT_SENSOR)
+                        runout.reset();
+                    #endif
+                    if (ExtUI::isWaitingOnUser()) {
+                        #if ENABLED(ADVANCED_PAUSE_FEATURE)
+                        ExtUI::setPauseMenuResponse(PAUSE_RESPONSE_RESUME_PRINT);
+                        #endif
+                        ExtUI::setUserConfirmed();
+                    }
+                    else {
+                        ExtUI::resumePrint();
+                        // If the pause previously interrupted a blocking heat,
+                        // restore the targets (as non-blocking set-target commands)
+                        // so heating resumes but we do not re-enter a blocking wait.
+                        restore_blocking_heating_cr6();
+                    }
+                    ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING);
+                    break;
+
+                case 3:
+                    // User chose to stay paused: return to the paused screen
+                    // without changing Marlin state.
+                    ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_PAUSED);
                     break;
             }
             break;
@@ -330,10 +418,10 @@ void PrintFinishMenuHandler(DGUS_VP_Variable &var, unsigned short buttonValue) {
                 case 5:
                     ScreenHandler.GotoScreen(DGUSLCD_SCREEN_MAIN);
                     break;
+                }
+                break;
             }
-            break;
-    }
-}
+        }
 
 void FilamentRunoutHandler(DGUS_VP_Variable &var, unsigned short buttonValue) {
     switch (var.VP){
@@ -349,13 +437,33 @@ void FilamentRunoutHandler(DGUS_VP_Variable &var, unsigned short buttonValue) {
     }
 }
 
-void StopConfirmScreenHandler(DGUS_VP_Variable &var, unsigned short buttonValue) {
+void PrintStopDialogHandler(DGUS_VP_Variable &var, unsigned short buttonValue) {
     switch (var.VP){
         case VP_BUTTON_STOPPRINTKEY:
             switch (buttonValue) {
                 case 2:
+                    // Stop is an immediate, global abort. Call ExtUI::stopPrint()
+                    // unconditionally so the printer always terminates the job and
+                    // runs its stop/park/cleanup path regardless of whether
+                    // Advanced Pause is enabled or Marlin is waiting for a UI
+                    // response. This keeps Stop behavior simple and predictable.
                     ExtUI::stopPrint();
-                    ScreenHandler.GotoScreen(DGUSLCD_SCREEN_MAIN);
+                    // After stopping a print, show the print finish summary screen
+                    ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_FINISH);
+
+                    // If axes aren't homed, show a clearer status message after a short delay
+                    // so the user understands that auto-park tried to run but failed.
+                    if (!all_axes_homed()) {
+                        char msg[VP_M117_LEN] = {0};
+                        bool first = true;
+                        strcat(msg, "Cannot auto-park - axes not homed:");
+                        if (!axis_was_homed(X_AXIS)) { strcat(msg, first ? " X" : ", X"); first = false; }
+                        if (!axis_was_homed(Y_AXIS)) { strcat(msg, first ? " Y" : ", Y"); first = false; }
+                        if (!axis_was_homed(Z_AXIS)) { strcat(msg, first ? " Z" : ", Z"); first = false; }
+
+                        // Post after 2000 ms to avoid clobbering immediate UI transitions
+                        ScreenHandler.PostDelayedStatusMessage(msg, 2000);
+                    }
                 break;
 
                 case 3:
@@ -426,13 +534,14 @@ const struct PageHandler PageHandlers[] PROGMEM = {
     PAGE_HANDLER(DGUSLCD_Screens::DGUSLCD_SCREEN_FILAMENTRUNOUT1, FilamentRunoutHandler)
     PAGE_HANDLER(DGUSLCD_Screens::DGUSLCD_SCREEN_FILAMENTRUNOUT2, FilamentRunoutHandler)
 
-    PAGE_HANDLER(DGUSLCD_Screens::DGUSLCD_SCREEN_DIALOG_STOP, StopConfirmScreenHandler)
+    PAGE_HANDLER(DGUSLCD_Screens::DGUSLCD_SCREEN_DIALOG_PAUSE, PrintPauseDialogHandler)
+    PAGE_HANDLER(DGUSLCD_Screens::DGUSLCD_SCREEN_DIALOG_RESUME, PrintResumeDialogHandler)
+    PAGE_HANDLER(DGUSLCD_Screens::DGUSLCD_SCREEN_DIALOG_STOP, PrintStopDialogHandler)
 
     PAGE_HANDLER(DGUSLCD_Screens::DGUSLCD_SCREEN_PRINT_RUNNING, PrintRunningMenuHandler)
     PAGE_HANDLER(DGUSLCD_Screens::DGUSLCD_SCREEN_PRINT_PAUSED, PrintPausedMenuHandler)
     PAGE_HANDLER(DGUSLCD_Screens::DGUSLCD_SCREEN_PRINT_FINISH, PrintFinishMenuHandler)
 
-    PAGE_HANDLER(DGUSLCD_Screens::DGUSLCD_SCREEN_DIALOG_PAUSE, PrintPauseDialogHandler)
 
     PAGE_HANDLER(DGUSLCD_Screens::DGUSLCD_SCREEN_PREPARE, PrepareMenuHandler)
 

@@ -76,6 +76,10 @@
   #include "powerloss.h"
 #endif
 
+#if ENABLED(DGUS_LCD_UI_CR6_COMM)
+#include "../lcd/extui/cr6_community_ui/DGUSScreenHandler.h"
+#endif
+
 #include "../libs/nozzle.h"
 #include "pause.h"
 
@@ -312,6 +316,12 @@ bool load_filament(const float slow_load_length/*=0*/, const float fast_load_len
     } while (TERN0(M600_PURGE_MORE_RESUMABLE, pause_menu_response == PAUSE_RESPONSE_EXTRUDE_MORE));
 
   #endif
+
+#if ENABLED(DGUS_LCD_UI_CR6_COMM)
+  // If we set a synchronous operation for the purge UI, finish it now so the
+  // throbber is turned off and controls are re-enabled.
+  ScreenHandler.EndPurgeOperation();
+#endif
 
   TERN_(MPCTEMP, MPC::e_paused = false);
 

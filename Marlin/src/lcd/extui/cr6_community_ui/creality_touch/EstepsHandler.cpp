@@ -137,7 +137,8 @@ void EstepsHandler::HandleStartButton(DGUS_VP_Variable &var, void *val_ptr) {
     ScreenHandler.GotoScreen(DGUSLCD_SCREEN_ESTEPS_CALIBRATION_RESULTS, false);
     ScreenHandler.Buzzer(0, 250);
     syncOperation.done();
-    SetStatusMessage(PSTR("Measure remaining filament"));
+    // Show transient instruction to the user and auto-clear
+    DGUSScreenHandler::PostDelayedStatusMessage_P(PSTR("Measure remaining filament"), 0);
 }
 
 void EstepsHandler::HandleApplyButton(DGUS_VP_Variable &var, void *val_ptr) {
@@ -167,7 +168,7 @@ void EstepsHandler::SaveSettingsAndReturn(bool fullConfirm) {
     ScreenHandler.PopToOldScreen();
     if (fullConfirm) ScreenHandler.GotoScreen(DGUSLCD_SCREEN_MAIN, false);
 
-    SetStatusMessage(PSTR("New e-steps value saved"));
+    DGUSScreenHandler::PostDelayedStatusMessage_P(PSTR("New e-steps value saved"), 0);
 }
 
 void EstepsHandler::HandleRemainingFilament(DGUS_VP_Variable &var, void *val_ptr) {
@@ -177,12 +178,12 @@ void EstepsHandler::HandleRemainingFilament(DGUS_VP_Variable &var, void *val_ptr
     constexpr float precision = 0.01;
     float actualExtrusion = mark_filament_mm - remaining_filament;
     if (actualExtrusion < (-precision)) {
-        SetStatusMessage(PSTR("Mark filament further"));
+        DGUSScreenHandler::PostDelayedStatusMessage_P(PSTR("Mark filament further"), 0);
         return;
     }
 
     if (actualExtrusion < precision) {
-        SetStatusMessage(PSTR("E-steps are correct"));
+        DGUSScreenHandler::PostDelayedStatusMessage_P(PSTR("E-steps are correct"), 0);
         calculated_esteps = set_esteps;
         return;
     }
@@ -197,7 +198,7 @@ void EstepsHandler::HandleRemainingFilament(DGUS_VP_Variable &var, void *val_ptr
     calculated_esteps = new_steps;
 
     // Status update
-    SetStatusMessage(PSTR("Calculated new e-steps"));
+    DGUSScreenHandler::PostDelayedStatusMessage_P(PSTR("Calculated new e-steps"), 0);
 }
 
 void EstepsHandler::SetStatusMessage(PGM_P statusMessage) {

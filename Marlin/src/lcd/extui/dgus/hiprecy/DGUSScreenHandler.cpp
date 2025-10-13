@@ -69,6 +69,8 @@
 
   void DGUSScreenHandler::sdStartPrint(DGUS_VP_Variable &var, void *val_ptr) {
     if (!filelist.seek(file_to_print)) return;
+    // Ensure the printer is homed before starting this print
+    queue.inject_P(G28_STR);
     ExtUI::printFile(filelist.shortFilename());
     gotoScreen(DGUS_SCREEN_SDPRINTMANIPULATION);
   }

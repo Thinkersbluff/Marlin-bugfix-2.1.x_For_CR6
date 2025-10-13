@@ -48,7 +48,7 @@ namespace ExtUI {
 #endif
 
   void onPrinterKilled(FSTR_P const error, FSTR_P const component) { (void)error; (void)component; }
-  void onPauseMode(PauseMessage m, PauseMode mm, uint8_t extruder) { (void)m; (void)mm; (void)extruder; }
+  void onPauseMode(PauseMessage m, PauseMode mm, uint8_t extruder) { stdOnPauseMode(m, mm, extruder); }
   void onMediaMounted() { /* no-op */ }
   void onSettingsStored(bool ok) { (void)ok; }
   void onSettingsLoaded(bool ok) { (void)ok; }

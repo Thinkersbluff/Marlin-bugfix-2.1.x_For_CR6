@@ -37,6 +37,8 @@
 #include "DGUSScreenHandler.h"
 #include "./creality_touch/PIDHandler.h"
 #include "./creality_touch/MeshValidationHandler.h"
+// Centralized pause-mode handler for CR6 UI.
+#include "PauseModeHandler.h"
 
 #if ENABLED(POWER_LOSS_RECOVERY)
   #include "../../../feature/powerloss.h"
@@ -127,30 +129,47 @@ bool hasPrintTimer = false;
   }
 
   void onUserConfirmRequired(const char * const msg) {
-    if (msg) {
-      DEBUG_ECHOLNPAIR("User confirmation requested: ", msg);
-
-      if (ScreenHandler.getCurrentScreen() == DGUSLCD_SCREEN_FEED) {
-        // We're in the feed (load filament) workflow - immediately assume confirmed
-        onUserConfirmed();
-        return;
+    if (!msg) {
+      // Cancellation - if we're showing a popup then pop back
+      if (ScreenHandler.getCurrentScreen() == DGUSLCD_SCREEN_POPUP) {
+        DEBUG_ECHOLNPAIR("User confirmation canceled");
+        ScreenHandler.setstatusmessagePGM(nullptr);
+        ScreenHandler.PopToOldScreen();
       }
-
-      ScreenHandler.setstatusmessagePGM(msg);
-      ScreenHandler.sendinfoscreen(PSTR("Confirmation required"), msg, NUL_STR, PSTR("Ok"), true, true, false, true);
-
-      if (ExtUI::isPrinting()) {
-        ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_PAUSED);
-      } else {
-        ScreenHandler.GotoScreen(DGUSLCD_SCREEN_POPUP);
-      }
+      return;
     }
-    else if (ScreenHandler.getCurrentScreen() == DGUSLCD_SCREEN_POPUP) {
-      DEBUG_ECHOLNPAIR("User confirmation canceled");
 
-      ScreenHandler.setstatusmessagePGM(nullptr);
-      ScreenHandler.PopToOldScreen();
+    DEBUG_ECHOLNPAIR("User confirmation requested: ", msg);
+    // Previously the FEED (load/unload) screen auto-confirmed here which
+    // prevented the centralized PauseModeHandler from receiving the
+    // pause prompt. Remove the auto-confirm so the handler can present the
+    // appropriate prompt/response dialog even while the user is in FEED.
+
+    // Ensure the DGUS popup/confirm VPs contain the raw Marlin message and
+    // a short pause-mode header so Screen#66 (Confirm) or other popup
+    // screens will display the exact Marlin text and the pause-mode name.
+    // Copy the pause-mode label out of flash into RAM so we can pass a
+    // simple `const char*` to sendinfoscreen without type mismatches.
+    char pause_label[VP_MSGSTR4_LEN + 1] = {0};
+    FSTR_P src_label = GET_TEXT_F(MSG_FILAMENT_CHANGE_HEADER_PAUSE);
+    switch (ExtUI::getPauseMode()) {
+      case PAUSE_MODE_CHANGE_FILAMENT: src_label = GET_TEXT_F(MSG_FILAMENT_CHANGE_HEADER); break;
+      case PAUSE_MODE_LOAD_FILAMENT:   src_label = GET_TEXT_F(MSG_FILAMENT_CHANGE_HEADER_LOAD); break;
+      case PAUSE_MODE_UNLOAD_FILAMENT: src_label = GET_TEXT_F(MSG_FILAMENT_CHANGE_HEADER_UNLOAD); break;
+      default: break;
     }
+  // Copy from flash into RAM. Strings are short (header text), so strcpy_P is safe here.
+  // Use FTOP() to convert FSTR_P (FlashStringHelper) to a PGM pointer as used elsewhere in the codebase.
+  strcpy_P(pause_label, FTOP(src_label));
+    pause_label[VP_MSGSTR4_LEN] = '\0';
+
+    // Populate the display message buffers (VP_MSGSTR1..4) so the Confirm/Popup
+    // screens show the Marlin-provided message and the pause-mode header.
+    // `msg` is flash-resident when coming from GET_TEXT_F, so mark line1 as PGM.
+    ScreenHandler.sendinfoscreen(msg, nullptr, nullptr, pause_label, true, false, false, false);
+
+    // Delegate to centralized, mode-aware pause handler for the rest of the flow.
+    CR6PauseHandler::HandlePauseMessage(ExtUI::pauseModeStatus, ExtUI::getPauseMode(), 0);
   }
 
   void onStatusChanged(const char * const msg) { ScreenHandler.setstatusmessage(msg); }
@@ -246,6 +265,12 @@ bool hasPrintTimer = false;
       switch (rst) {
         case PID_STARTED:
           // It has no use switching to the PID screen. It really isn't that informative.
+          break;
+        case PID_BED_STARTED:
+          // There is no BED_PID functionality in the CR6_COMM UI.
+          break;
+        case PID_CHAMBER_STARTED:
+          // There is no CHAMBER_PID functionality in the CR6_COMM UI.
           break;
         case PID_BAD_EXTRUDER_NUM:
           PIDHandler::result_message = GET_TEXT(MSG_PID_BAD_EXTRUDER_NUM);

@@ -60,7 +60,7 @@ void MeshValidationHandler::Start() {
 
     // Validate
     if (!ExtUI::getMeshValid()) {
-        SetStatusMessage("Please level bed first");
+        DGUSScreenHandler::PostDelayedStatusMessage_P(PSTR("Please level bed first"), 0);
         return;
     }
 
@@ -95,7 +95,7 @@ void MeshValidationHandler::Cancel() {
     is_cancelling = true;
     ExtUI::setCancelState();
 
-    SetStatusMessage("Cancelling...");
+    DGUSScreenHandler::PostDelayedStatusMessage_P(PSTR("Cancelling..."), 0);
 }
 
 void MeshValidationHandler::OnMeshValidationStart() {
@@ -126,12 +126,12 @@ void MeshValidationHandler::OnMeshValidationFinish() {
             // - Disable stepper
             strcpy_P(gcodeBuffer, PSTR("M84"));
 
-            SetStatusMessage("Mesh validation pattern printed");
+            DGUSScreenHandler::PostDelayedStatusMessage_P(PSTR("Mesh validation pattern printed"), 0);
         } else {
             // Park and disable steppers
             strcpy_P(gcodeBuffer, PSTR("G0 X5 F2000\nG27\nM84"));
 
-            SetStatusMessage("Canceled mesh validation pattern");
+            DGUSScreenHandler::PostDelayedStatusMessage_P(PSTR("Canceled mesh validation pattern"), 0);
         }
 
         // Enqueue

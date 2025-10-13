@@ -27,6 +27,7 @@ enum DGUSLCD_Screens : uint8_t {
   DGUSLCD_SCREEN_MAIN = 28,
 
   DGUSLCD_SCREEN_CONFIRM = 66,
+  DGUSLCD_SCREEN_INFOBOX = 62,
   DGUSLCD_SCREEN_SDPRINTMANIPULATION = 37 ,
   DGUSLCD_SCREEN_SDPRINTTUNE = 41,
   DGUSLCD_SCREEN_SDFILELIST = 67,
@@ -39,6 +40,7 @@ enum DGUSLCD_Screens : uint8_t {
   DGUSLCD_SCREEN_PRINT_PAUSED = 39,    // DWINTouchPage::PRINT_PROGRESS_PAUSED
 
   DGUSLCD_SCREEN_DIALOG_PAUSE = 38,    // DWINTouchPage::DIALOG_PAUSE_PRINTING
+  DGUSLCD_SCREEN_DIALOG_RESUME = 65,   // DWINTouchPage::DIALOG_RESUME_PRINTING
   DGUSLCD_SCREEN_DIALOG_STOP = 40,     // DWINTouchPage::DIALOG_STOP_PRINTING
 
   DGUSLCD_SCREEN_TUNING = 41,          // DWINTouchPage::MENU_TUNING
@@ -103,9 +105,9 @@ constexpr uint16_t VERSION_MISMATCH_LED_FLASH_DELAY = 1000;
 constexpr uint16_t VP_MSGSTR1 = 0x2010;
 constexpr uint8_t VP_MSGSTR1_LEN = 0x20;  // might be more place for it...
 constexpr uint16_t VP_MSGSTR2 = 0x2030;
-constexpr uint8_t VP_MSGSTR2_LEN = 0x40;
-constexpr uint16_t VP_MSGSTR3 = 0x2070;
-constexpr uint8_t VP_MSGSTR3_LEN = 0x40;
+constexpr uint8_t VP_MSGSTR2_LEN = 0x20;
+constexpr uint16_t VP_MSGSTR3 = 0x2060;
+constexpr uint8_t VP_MSGSTR3_LEN = 0x20;
 constexpr uint16_t VP_MSGSTR4 = 0x2080;
 constexpr uint8_t VP_MSGSTR4_LEN = 0x20;
 

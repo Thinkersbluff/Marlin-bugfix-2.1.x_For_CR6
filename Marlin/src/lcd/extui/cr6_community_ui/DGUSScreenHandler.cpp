@@ -34,6 +34,7 @@
 
 #include "../ui_api.h"
 #include "../../../MarlinCore.h"
+#include "../../../lcd/marlinui.h"
 #include "../../../module/temperature.h"
 #include "../../../module/motion.h"
 #include "../../../module/settings.h"
@@ -53,6 +54,11 @@
 #endif
 
 uint16_t DGUSScreenHandler::ConfirmVP;
+bool DGUSScreenHandler::suppress_popup_pause_response = false;
+
+void DGUSScreenHandler::SetSuppressPopupPauseResponse(bool suppress) {
+  suppress_popup_pause_response = suppress;
+}
 
 #if ENABLED(SDSUPPORT)
   int16_t DGUSScreenHandler::top_file = 0;
@@ -69,12 +75,44 @@ uint8_t DGUSScreenHandler::update_ptr;
 uint16_t DGUSScreenHandler::skipVP;
 bool DGUSScreenHandler::ScreenComplete;
 bool DGUSScreenHandler::SaveSettingsRequested;
+
+#if DGUS_SYNCH_OPS_ENABLED
 bool DGUSScreenHandler::HasSynchronousOperation;
+#else
+// When synchronous ops are disabled at compile time, keep the flag defined once and initialized to false
+bool DGUSScreenHandler::HasSynchronousOperation = false;
+#endif
+
 bool DGUSScreenHandler::HasScreenVersionMismatch;
 uint8_t DGUSScreenHandler::MeshLevelIndex = -1;
 uint8_t DGUSScreenHandler::MeshLevelIconIndex = -1;
 bool DGUSScreenHandler::fwretract_available = TERN(FWRETRACT,  true, false);
 bool DGUSScreenHandler::HasRGBSettings = TERN(HAS_COLOR_LEDS, true, false);
+
+// Delayed status message storage (checked from loop())
+// Owned buffer for delayed status message to avoid lifetime issues.
+static char delayed_status_buffer[VP_M117_LEN] = {0};
+static bool delayed_status_in_flash = false;
+static millis_t delayed_status_until = 0;
+// When a message is shown, keep a timeout to clear it (5s default)
+static millis_t delayed_status_clear_at = 0;
+
+void DGUSScreenHandler::PostDelayedStatusMessage(const char* msg, uint32_t delay_ms) {
+  if (!msg) return;
+  // Copy into owned buffer (truncate if necessary)
+  strncpy(delayed_status_buffer, msg, sizeof(delayed_status_buffer)-1);
+  delayed_status_buffer[sizeof(delayed_status_buffer)-1] = '\0';
+  delayed_status_in_flash = false;
+  delayed_status_until = millis() + delay_ms;
+}
+
+void DGUSScreenHandler::PostDelayedStatusMessage_P(PGM_P msg, uint32_t delay_ms) {
+  if (!msg) return;
+  // Copy from flash into owned buffer
+  strcpy_P(delayed_status_buffer, msg);
+  delayed_status_in_flash = true;
+  delayed_status_until = millis() + delay_ms;
+}
 
 static_assert(GRID_MAX_POINTS_X == GRID_MAX_POINTS_Y, "Assuming bed leveling points is square");
 
@@ -94,10 +132,10 @@ void DGUSScreenHandler::sendinfoscreen(const char* line1, const char* line2, con
     ramcopy.memadr = (void*) line3;
     l3inflash ? DGUSScreenHandler::DGUSLCD_SendStringToDisplayPGM(ramcopy) : DGUSScreenHandler::DGUSLCD_SendStringToDisplay(ramcopy);
   }
-  //if (populate_VPVar(VP_MSGSTR4, &ramcopy)) {
-  //  ramcopy.memadr = (void*) line4;
-  //  l4inflash ? DGUSScreenHandler::DGUSLCD_SendStringToDisplayPGM(ramcopy) : DGUSScreenHandler::DGUSLCD_SendStringToDisplay(ramcopy);
-  //}
+  if (populate_VPVar(VP_MSGSTR4, &ramcopy)) {
+    ramcopy.memadr = (void*) line4;
+    l4inflash ? DGUSScreenHandler::DGUSLCD_SendStringToDisplayPGM(ramcopy) : DGUSScreenHandler::DGUSLCD_SendStringToDisplay(ramcopy);
+  }
 }
 
 
@@ -688,6 +726,9 @@ void DGUSScreenHandler::DGUSLCD_SendHeaterStatusToDisplay(DGUS_VP_Variable &var)
 
   void DGUSScreenHandler::DGUSLCD_SD_StartPrint(DGUS_VP_Variable &var, void *val_ptr) {
     if (!filelist.seek(file_to_print)) return;
+    // Ensure the printer is homed before starting this print. Queue a G28 first
+    // so the homing completes before the SD print begins.
+    queue.inject_P(G28_STR);
     ExtUI::printFile(filelist.shortFilename());
     ScreenHandler.GotoScreen(
       DGUSLCD_SCREEN_SDPRINTMANIPULATION
@@ -713,10 +754,7 @@ void DGUSScreenHandler::DGUSLCD_SendHeaterStatusToDisplay(DGUS_VP_Variable &var)
   }
 
   void DGUSScreenHandler::SDCardRemoved() {
-    if (!IS_SD_PRINTING()) {
-      return;
-    }
-
+    // Always handle media removal so the UI can react (navigate back to a safe screen)
     if (current_screen == DGUSLCD_SCREEN_SDFILELIST
         || (current_screen == DGUSLCD_SCREEN_CONFIRM && (ConfirmVP == VP_SD_AbortPrintConfirmed || ConfirmVP == VP_SD_FileSelectConfirm))
         || current_screen == DGUSLCD_SCREEN_SDPRINTMANIPULATION
@@ -769,6 +807,8 @@ bool DGUSScreenHandler::HandlePendingUserConfirmation() {
   return true;
 }
 
+// Synchronous-operation helpers
+#if DGUS_SYNCH_OPS_ENABLED
 void DGUSScreenHandler::SetSynchronousOperationStart() {
   HasSynchronousOperation = true;
   ForceCompleteUpdate();
@@ -777,6 +817,22 @@ void DGUSScreenHandler::SetSynchronousOperationStart() {
 void DGUSScreenHandler::SetSynchronousOperationFinish() {
   HasSynchronousOperation = false;
 }
+
+// Begin/End helpers for purge flows
+void DGUSScreenHandler::BeginPurgeOperation() {
+  // Start a synchronous operation and immediately update busy indicators
+  SetSynchronousOperationStart();
+  // Ensure the busy state is sent so the display shows the throbber now
+  DGUS_VP_Variable tmp;
+  if (populate_VPVar(VP_BUSY_ANIM_STATE, &tmp)) SendBusyState(tmp);
+}
+
+void DGUSScreenHandler::EndPurgeOperation() {
+  // Finish and refresh UI so the busy indicators are cleared
+  SetSynchronousOperationFinish();
+  ForceCompleteUpdate();
+}
+#endif
 
 void DGUSScreenHandler::SendBusyState(DGUS_VP_Variable &var) {
   dgusdisplay.WriteVariable(VP_BACK_BUTTON_STATE, HasSynchronousOperation ? ICON_BACK_BUTTON_DISABLED : ICON_BACK_BUTTON_ENABLED);
@@ -801,6 +857,27 @@ void DGUSScreenHandler::OnPrintFinished() {
 }
 
 void DGUSScreenHandler::ScreenConfirmedOK(DGUS_VP_Variable &var, void *val_ptr) {
+  // The display writes VP_CONFIRMED when the user presses a button on the
+  // confirmation screen. The payload indicates which button was pressed.
+  // If the user pressed NO (value == 0) we should NOT forward this to the
+  // ConfirmVP handler (which would start actions like printing). Instead,
+  // go back to the main menu. Only forward when the user explicitly
+  // confirmed (non-zero value).
+  uint16_t button_value = swap16(*(uint16_t*)val_ptr);
+
+  // The DGUS Confirm dialog uses different button encodings depending on
+  // the context. Empirically the SD file confirm uses: 1 = NO, 2 = YES.
+  // To avoid starting prints when the user pressed NO, ensure we only
+  // forward the confirmation to the emulated VP when we see the expected
+  // 'confirm' code for file confirms.
+  if (ConfirmVP == VP_SD_FileSelectConfirm || ConfirmVP == VP_SD_AbortPrintConfirmed) {
+    if (button_value == 1) {
+      // NO response to Screen#66 "Confirm?"" questions -> go back to previous screen. Do NOT perform the YES action.
+      PopToOldScreen();
+      return;
+    }
+  }
+
   DGUS_VP_Variable ramcopy;
   if (!populate_VPVar(ConfirmVP, &ramcopy)) return;
   if (ramcopy.set_by_display_handler) ramcopy.set_by_display_handler(ramcopy, val_ptr);
@@ -1129,7 +1206,44 @@ void DGUSScreenHandler::ScreenChangeHook(DGUS_VP_Variable &var, void *val_ptr) {
   DEBUG_ECHOLNPAIR("Cancel target:", target);
 
   if (ExtUI::isWaitingOnUser() && current_screen == DGUSLCD_SCREEN_POPUP) {
-    DEBUG_ECHOLN("Executing confirmation action");
+    // When a popup is shown in response to Marlin waiting on the user, the
+    // display usually writes to VP_SCREENCHANGE (VP 0x219F) with a two-byte
+    // value. The low byte is the target screen, the high byte is optional
+    // auxiliary info. Historically the code simply treated any popup button
+    // as an implicit "confirm" and called setUserConfirmed().
+    //
+    // To support richer dialogs (for example: Continue vs Purge choices)
+    // allow the high byte (info) to carry a small command that the firmware
+    // can map to a PauseMenuResponse prior to confirming. Example
+    // encoding (display-side): 0x01<<8 | DGUSLCD_SCREEN_POPUP  => Continue
+    //                             0x02<<8 | DGUSLCD_SCREEN_POPUP  => Purge
+    //
+    DEBUG_ECHOLN("Executing confirmation action (popup)");
+
+    // info byte is the high byte (first byte sent by DWIN for VP_SCREENCHANGE)
+    uint8_t info = tmp[0];
+
+    // If suppression is not set, map info codes into the pause menu
+    // response so Marlin can take the corresponding action (resume vs purge).
+    // Some popups (like heater-timeout) should not set a response and should
+    // only release the wait; PauseModeHandler can temporarily set suppression
+    // to ensure that behavior.
+    if (!suppress_popup_pause_response) {
+  #if ENABLED(ADVANCED_PAUSE_FEATURE)
+      switch (info) {
+        case 0x01: // display encoded "Continue" action
+          ExtUI::setPauseMenuResponse(PAUSE_RESPONSE_RESUME_PRINT);
+          break;
+        case 0x02: // display encoded "Purge / Extrude more" action
+          ExtUI::setPauseMenuResponse(PAUSE_RESPONSE_EXTRUDE_MORE);
+          break;
+        default:
+          break;
+      }
+  #endif
+    }
+
+    // Finally, release Marlin's wait and pop the popup screen
     ExtUI::setUserConfirmed();
     PopToOldScreen();
     return;
@@ -1786,7 +1900,88 @@ bool DGUSScreenHandler::loop() {
     }
   }
 
+  // Check for any delayed status message and post it when due (owned buffer)
+  const millis_t ms2 = millis();
+  if (delayed_status_until && ELAPSED(ms2, delayed_status_until)) {
+    // Show the owned buffer
+    delayed_status_until = 0;
+    if (delayed_status_buffer[0]) {
+      ScreenHandler.setstatusmessage(delayed_status_buffer);
+      // Schedule clearing after 10 seconds
+      delayed_status_clear_at = ms2 + 10000;
+    }
+  }
+
+  // If a delayed status was shown and its clear timeout expired, clear it
+  if (delayed_status_clear_at && ELAPSED(ms2, delayed_status_clear_at)) {
+    delayed_status_clear_at = 0;
+    ScreenHandler.setstatusmessage("");
+    // Clear the owned buffer
+    delayed_status_buffer[0] = '\0';
+  }
+
   return IsScreenComplete();
+}
+
+void DGUSScreenHandler::HandleMaterialPreheatPreset(DGUS_VP_Variable &var, void *val_ptr) {
+  // Extract temperature value from the display (convert from big-endian to little-endian)
+  const int16_t value = swap16(*(uint16_t*)val_ptr);
+
+  // Determine which material preset and parameter to update based on VP address
+  switch (var.VP) {
+    case VP_PREHEAT_PLA_HOTEND_TEMP:
+      ui.material_preset[0].hotend_temp = value;
+      SERIAL_ECHOLNPGM("Updated PLA hotend preset to ", value);
+      break;
+    case VP_PREHEAT_PLA_BED_TEMP:
+      ui.material_preset[0].bed_temp = value;
+      SERIAL_ECHOLNPGM("Updated PLA bed preset to ", value);
+      break;
+    #if PREHEAT_COUNT > 1
+    case VP_PREHEAT_ABS_HOTEND_TEMP:
+      ui.material_preset[1].hotend_temp = value;
+      SERIAL_ECHOLNPGM("Updated ABS hotend preset to ", value);
+      break;
+    case VP_PREHEAT_ABS_BED_TEMP:
+      ui.material_preset[1].bed_temp = value;
+      SERIAL_ECHOLNPGM("Updated ABS bed preset to ", value);
+      break;
+    #endif
+    default:
+      SERIAL_ECHOLNPGM("Unknown preheat preset VP: ", var.VP);
+      return;
+  }
+
+  // Save settings to EEPROM to persist the change
+  RequestSaveSettings();
+}
+
+void DGUSScreenHandler::DGUSLCD_SendMaterialPreheatPresetToDisplay(DGUS_VP_Variable &var) {
+  int16_t value = 0;
+
+  // Determine which material preset value to read based on VP address
+  switch (var.VP) {
+    case VP_PREHEAT_PLA_HOTEND_TEMP:
+      value = ui.material_preset[0].hotend_temp;
+      break;
+    case VP_PREHEAT_PLA_BED_TEMP:
+      value = ui.material_preset[0].bed_temp;
+      break;
+    #if PREHEAT_COUNT > 1
+    case VP_PREHEAT_ABS_HOTEND_TEMP:
+      value = ui.material_preset[1].hotend_temp;
+      break;
+    case VP_PREHEAT_ABS_BED_TEMP:
+      value = ui.material_preset[1].bed_temp;
+      break;
+    #endif
+    default:
+      SERIAL_ECHOLNPGM("Unknown preheat preset VP for send: ", var.VP);
+      return;
+  }
+
+  // Send the value to the display
+  dgusdisplay.WriteVariable(var.VP, value);
 }
 
 #endif // HAS_DGUS_LCD

@@ -31,6 +31,11 @@
 #include "../../../feature/pause.h"
 #include "../../../lcd/marlinui.h"
 
+#if ENABLED(DGUS_LCD_UI_CR6_COMM)
+  #include "../../../lcd/extui/cr6_community_ui/DGUSVPVariable.h"
+  #include "../../../lcd/extui/cr6_community_ui/creality_touch/FilamentLoadUnloadHandler.h"
+#endif
+
 #if HAS_MULTI_EXTRUDER
   #include "../../../module/tool_change.h"
 #endif
