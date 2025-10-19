@@ -94,6 +94,7 @@
   #define DGUS_LCD_UI_E3S1PRO 1
 #elif DGUS_UI_IS(CR6_COMM)
   #define DGUS_LCD_UI_CR6_COMM 1
+  #define LCD_HEIGHT 4
 #endif
 
 /**
