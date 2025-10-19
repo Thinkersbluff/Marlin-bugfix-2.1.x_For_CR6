@@ -2,6 +2,7 @@
 #include "cr6_compat.h"
 #include "../ui_api.h"
 #include "../../marlinui.h"
+#include "DGUSScreenHandler.h"
 
 namespace ExtUI {
 
@@ -49,7 +50,11 @@ namespace ExtUI {
 
   void onPrinterKilled(FSTR_P const error, FSTR_P const component) { (void)error; (void)component; }
   void onPauseMode(PauseMessage m, PauseMode mm, uint8_t extruder) { stdOnPauseMode(m, mm, extruder); }
-  void onMediaMounted() { /* no-op */ }
+  void onMediaMounted() {
+    #if ENABLED(SDSUPPORT)
+      ScreenHandler.setstatusmessage("SD Card Ready");
+    #endif
+  }
   void onSettingsStored(bool ok) { (void)ok; }
   void onSettingsLoaded(bool ok) { (void)ok; }
   void onAxisEnabled(const axis_t a) { (void)a; }

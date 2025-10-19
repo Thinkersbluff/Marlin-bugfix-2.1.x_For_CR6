@@ -58,6 +58,10 @@ bool DGUSScreenHandler::suppress_popup_pause_response = false;
 
 void DGUSScreenHandler::SetSuppressPopupPauseResponse(bool suppress) {
   suppress_popup_pause_response = suppress;
+  // Debug: log transitions of the suppression flag so we can correlate
+  // with popup/show events and the ScreenChangeHook info-byte prints.
+  SERIAL_ECHOPAIR("SetSuppressPopupPauseResponse -> ", suppress ? "ENABLED" : "DISABLED");
+  SERIAL_ECHOLNPAIR(" current_screen=", current_screen);
 }
 
 #if ENABLED(SDSUPPORT)
@@ -88,6 +92,12 @@ uint8_t DGUSScreenHandler::MeshLevelIndex = -1;
 uint8_t DGUSScreenHandler::MeshLevelIconIndex = -1;
 bool DGUSScreenHandler::fwretract_available = TERN(FWRETRACT,  true, false);
 bool DGUSScreenHandler::HasRGBSettings = TERN(HAS_COLOR_LEDS, true, false);
+
+// Public accessor to allow external callers to detect whether a Confirm
+// dialog is currently active (used to avoid overwriting confirm VPs).
+bool DGUSScreenHandler::IsConfirmActive() {
+  return (current_screen == DGUSLCD_SCREEN_CONFIRM) && (ConfirmVP != 0);
+}
 
 // Delayed status message storage (checked from loop())
 // Owned buffer for delayed status message to avoid lifetime issues.
@@ -293,6 +303,9 @@ void DGUSScreenHandler::HandleUserConfirmationPopUp(uint16_t VP, const char* lin
   }
 
   ConfirmVP = VP;
+  // Debug: record which VP is being used for the confirmation so we can
+  // correlate display returns with firmware actions.
+  SERIAL_ECHOLNPAIR("ConfirmVP set to ", ConfirmVP);
   sendinfoscreen(line1, line2, line3, line4, l1, l2, l3, l4);
   ScreenHandler.GotoScreen(DGUSLCD_SCREEN_CONFIRM);
 }
@@ -761,6 +774,11 @@ void DGUSScreenHandler::DGUSLCD_SendHeaterStatusToDisplay(DGUS_VP_Variable &var)
     ) ScreenHandler.GotoScreen(DGUSLCD_SCREEN_MAIN, false);
   }
 
+  void DGUSScreenHandler::SDCardMounted() {
+    // Clear any previous SD card error message when card successfully mounts
+    ScreenHandler.setstatusmessage("SD Card Ready");
+  }
+
   void DGUSScreenHandler::SDCardError() {
     DGUSScreenHandler::SDCardRemoved();
     ScreenHandler.sendinfoscreen(PSTR("NOTICE"), nullptr, PSTR("SD card error"), nullptr, true, true, true, true);
@@ -864,6 +882,40 @@ void DGUSScreenHandler::ScreenConfirmedOK(DGUS_VP_Variable &var, void *val_ptr) 
   // go back to the main menu. Only forward when the user explicitly
   // confirmed (non-zero value).
   uint16_t button_value = swap16(*(uint16_t*)val_ptr);
+
+  // Debug: print the full 16-bit payload and the currently-active ConfirmVP
+  SERIAL_ECHOPAIR("DWIN VP_CONFIRMED raw=0x", button_value);
+  SERIAL_ECHOLNPAIR(" ConfirmVP=", ConfirmVP);
+
+  // If Marlin is waiting on the user and we're on a POPUP/CONFIRM screen,
+  // the confirm button may arrive via VP_CONFIRMED instead of VP_SCREENCHANGE.
+  // Map the high-byte "info" into pause responses (Resume / Purge) the same
+  // way ScreenChangeHook does, then release the wait and pop the screen.
+  if (ExtUI::isWaitingOnUser() && (current_screen == DGUSLCD_SCREEN_POPUP || current_screen == DGUSLCD_SCREEN_CONFIRM)) {
+    uint8_t info = (uint8_t)(button_value >> 8);
+    // Debug: show the raw value and whether suppression is active
+    SERIAL_ECHOPAIR("DWIN VP_CONFIRMED value=0x", button_value);
+    SERIAL_ECHOLNPAIR(" suppress_popup_pause_response=", suppress_popup_pause_response);
+
+    if (!suppress_popup_pause_response) {
+#if ENABLED(ADVANCED_PAUSE_FEATURE)
+      switch (info) {
+        case 0x01: // Continue / Resume
+          ExtUI::setPauseMenuResponse(PAUSE_RESPONSE_RESUME_PRINT);
+          break;
+        case 0x02: // Purge / Extrude more
+          ExtUI::setPauseMenuResponse(PAUSE_RESPONSE_EXTRUDE_MORE);
+          break;
+        default:
+          break;
+      }
+#endif
+    }
+
+    ExtUI::setUserConfirmed();
+    PopToOldScreen();
+    return;
+  }
 
   // The DGUS Confirm dialog uses different button encodings depending on
   // the context. Empirically the SD file confirm uses: 1 = NO, 2 = YES.
@@ -1205,7 +1257,7 @@ void DGUSScreenHandler::ScreenChangeHook(DGUS_VP_Variable &var, void *val_ptr) {
   DEBUG_ECHOLNPAIR("Current screen:", current_screen);
   DEBUG_ECHOLNPAIR("Cancel target:", target);
 
-  if (ExtUI::isWaitingOnUser() && current_screen == DGUSLCD_SCREEN_POPUP) {
+  if (ExtUI::isWaitingOnUser() && (current_screen == DGUSLCD_SCREEN_POPUP || current_screen == DGUSLCD_SCREEN_CONFIRM)) {
     // When a popup is shown in response to Marlin waiting on the user, the
     // display usually writes to VP_SCREENCHANGE (VP 0x219F) with a two-byte
     // value. The low byte is the target screen, the high byte is optional
@@ -1220,8 +1272,18 @@ void DGUSScreenHandler::ScreenChangeHook(DGUS_VP_Variable &var, void *val_ptr) {
     //
     DEBUG_ECHOLN("Executing confirmation action (popup)");
 
-    // info byte is the high byte (first byte sent by DWIN for VP_SCREENCHANGE)
-    uint8_t info = tmp[0];
+  // Compute the raw 16-bit payload and extract both bytes so we can log
+  // exactly what the display is sending (some displays use different
+  // byte order or only set the target without any info byte).
+  uint16_t raw = swap16(*(uint16_t*)val_ptr);
+  uint8_t info = tmp[0];
+  uint8_t target_byte = tmp[1];
+
+  // Debug: log full payload (raw) and both bytes, plus suppression state
+  SERIAL_ECHOPAIR("DWIN VP_SCREENCHANGE raw=0x", raw);
+  SERIAL_ECHOPAIR(" info=0x", info);
+  SERIAL_ECHOLNPAIR(" target=0x", target_byte);
+  SERIAL_ECHOLNPAIR(" suppress_popup_pause_response=", suppress_popup_pause_response);
 
     // If suppression is not set, map info codes into the pause menu
     // response so Marlin can take the corresponding action (resume vs purge).
