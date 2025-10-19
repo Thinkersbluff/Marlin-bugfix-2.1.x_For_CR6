@@ -67,7 +67,7 @@ namespace ExtUI {
     } else {
       ScreenHandler.GotoScreen(DGUSLCD_SCREEN_KILL);
     }
-    
+
     ScreenHandler.KillScreenCalled();
     while (!ScreenHandler.loop());  // Wait while anything is left to be sent
 }
@@ -93,7 +93,7 @@ bool hasPrintTimer = false;
     if (!IS_SD_FILE_OPEN() && !(PrintJobRecovery::valid() && PrintJobRecovery::exists())) {
       ScreenHandler.SetPrintingFromHost();
     }
-    
+
 #if ENABLED(LCD_SET_PROGRESS_MANUALLY)
     ui.progress_reset();
 #endif
@@ -140,6 +140,35 @@ bool hasPrintTimer = false;
     }
 
     DEBUG_ECHOLNPAIR("User confirmation requested: ", msg);
+    // Skip VP updates for messages that should show normal screens instead of popups
+    if (ExtUI::pauseModeStatus == PAUSE_MESSAGE_PARKING ||
+        ExtUI::pauseModeStatus == PAUSE_MESSAGE_CHANGING ||
+        (ExtUI::pauseModeStatus == PAUSE_MESSAGE_WAITING &&
+        (ExtUI::getPauseMode() == PAUSE_MODE_CHANGE_FILAMENT ||
+        ExtUI::getPauseMode() == PAUSE_MODE_LOAD_FILAMENT ||
+        ExtUI::getPauseMode() == PAUSE_MODE_UNLOAD_FILAMENT))) {
+      SERIAL_ECHOLNPGM("onUserConfirmRequired: PARKING/CHANGING/WAITING(filament) - skip VP update, show normal screen");
+      // Let the centralized pause handler process the message to show PRINT_PAUSED screen
+      CR6PauseHandler::HandlePauseMessage(ExtUI::pauseModeStatus, ExtUI::getPauseMode(), 0);
+      return;
+    }
+
+    // If a Confirm dialog is already displayed, avoid overwriting its
+    // text with a subsequent pause message that arrives immediately.
+    // Some pause flows emit multiple messages in quick succession (e.g.
+    // "Press Button" followed by "Nozzle Parked"). If we overwrite the
+    // Confirm screen's VPs the user never sees the resume prompt. To
+    // preserve the user's ability to act on the Confirm dialog, skip
+    // updating the display when we're already showing Screen#66 (Confirm)
+    // and a ConfirmVP has been set.
+    if (ScreenHandler.getCurrentScreen() == DGUSLCD_SCREEN_CONFIRM && ScreenHandler.IsConfirmActive()) {
+      SERIAL_ECHOLNPGM("onUserConfirmRequired: Confirm already active - skipping VP update to avoid overwrite");
+      // Still let the centralized pause handler process the logical pause
+      // message (it might toggle suppression or other state), but do not
+      // modify the visible VP lines.
+      CR6PauseHandler::HandlePauseMessage(ExtUI::pauseModeStatus, ExtUI::getPauseMode(), 0);
+      return;
+    }
     // Previously the FEED (load/unload) screen auto-confirmed here which
     // prevented the centralized PauseModeHandler from receiving the
     // pause prompt. Remove the auto-confirm so the handler can present the
@@ -165,8 +194,111 @@ bool hasPrintTimer = false;
 
     // Populate the display message buffers (VP_MSGSTR1..4) so the Confirm/Popup
     // screens show the Marlin-provided message and the pause-mode header.
-    // `msg` is flash-resident when coming from GET_TEXT_F, so mark line1 as PGM.
-    ScreenHandler.sendinfoscreen(msg, nullptr, nullptr, pause_label, true, false, false, false);
+    // Clear VP_MSGSTR1..3 first to avoid leftover garbage if the incoming
+    // Marlin message contains fewer than three lines. Then copy a bounded
+    // amount from PROGMEM and parse it safely for embedded NULs or '\n'.
+    {
+      // Clear lines 1..3 on the display (preserve pause_label in VP_MSGSTR4)
+      ScreenHandler.sendinfoscreen(nullptr, nullptr, nullptr, pause_label, false, false, false, false);
+
+      // Prepare per-line buffers and a bounded message buffer for safe parsing
+      char line1[VP_MSGSTR1_LEN + 1] = {0};
+      char line2[VP_MSGSTR2_LEN + 1] = {0};
+      char line3[VP_MSGSTR3_LEN + 1] = {0};
+
+      constexpr size_t MSGBUF_LEN = (VP_MSGSTR1_LEN + VP_MSGSTR2_LEN + VP_MSGSTR3_LEN) + 4;
+      char msgbuf[MSGBUF_LEN];
+      memset(msgbuf, 0, sizeof(msgbuf));
+
+      // Copy up to MSGBUF_LEN-1 bytes from PROGMEM (or RAM) into msgbuf. Use memcpy_P
+      // to allow embedded NULs to be copied intact when the source is in flash.
+      PGM_P pmsg = (PGM_P)msg;
+      if (pmsg) {
+        // If msg is in PROGMEM, copy from flash; otherwise memcpy from RAM
+        memcpy_P(msgbuf, pmsg, MSGBUF_LEN - 1);
+        msgbuf[MSGBUF_LEN - 1] = '\0';
+      } else {
+        // Fallback: if msg is a RAM pointer (unlikely for GET_TEXT_F) use strncpy
+        strncpy(msgbuf, msg ? msg : "", MSGBUF_LEN - 1);
+        msgbuf[MSGBUF_LEN - 1] = '\0';
+      }
+
+      // First, try parsing embedded NUL-delimited strings (MSG_2_LINE / MSG_3_LINE)
+      // by scanning msgbuf for NUL separators.
+      char *p = msgbuf;
+      size_t remaining = MSGBUF_LEN;
+      if (p && p[0]) {
+        // Copy first line up to VP_MSGSTR1_LEN
+        size_t l1 = strnlen(p, remaining);
+        if (l1) {
+          strncpy(line1, p, min(l1, (size_t)VP_MSGSTR1_LEN));
+          line1[VP_MSGSTR1_LEN] = '\0';
+        }
+        // advance past first NUL if present
+        if (l1 < remaining) {
+          p += l1 + 1;
+          remaining -= (l1 + 1);
+          if (p && remaining && p[0]) {
+            size_t l2 = strnlen(p, remaining);
+            if (l2) {
+              strncpy(line2, p, min(l2, (size_t)VP_MSGSTR2_LEN));
+              line2[VP_MSGSTR2_LEN] = '\0';
+            }
+            if (l2 < remaining) {
+              p += l2 + 1;
+              remaining -= (l2 + 1);
+              if (p && remaining && p[0]) {
+                size_t l3 = strnlen(p, remaining);
+                if (l3) {
+                  strncpy(line3, p, min(l3, (size_t)VP_MSGSTR3_LEN));
+                  line3[VP_MSGSTR3_LEN] = '\0';
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // If we only found one line (no embedded NULs after the first), fall back
+      // to splitting on '\n' within msgbuf to support newline-separated strings.
+      if (!line2[0] && !line3[0]) {
+        // Work on a writable copy (msgbuf already writable)
+        char *nl = strchr(msgbuf, '\n');
+        if (nl) {
+          *nl = '\0';
+          strncpy(line1, msgbuf, VP_MSGSTR1_LEN);
+          line1[VP_MSGSTR1_LEN] = '\0';
+          char *p2 = nl + 1;
+          nl = strchr(p2, '\n');
+          if (nl) {
+            *nl = '\0';
+            strncpy(line2, p2, VP_MSGSTR2_LEN);
+            line2[VP_MSGSTR2_LEN] = '\0';
+            strncpy(line3, nl + 1, VP_MSGSTR3_LEN);
+            line3[VP_MSGSTR3_LEN] = '\0';
+          } else {
+            strncpy(line2, p2, VP_MSGSTR2_LEN);
+            line2[VP_MSGSTR2_LEN] = '\0';
+          }
+        } else {
+          // Single-line message (msgbuf contains the whole string)
+          strncpy(line1, msgbuf, VP_MSGSTR1_LEN);
+          line1[VP_MSGSTR1_LEN] = '\0';
+        }
+      }
+
+      // Debugging: print what we'll send to the display
+      SERIAL_ECHOLNPAIR("Pause popup lines:", line1);
+      SERIAL_ECHOLNPAIR("Pause popup lines 2:", line2);
+      SERIAL_ECHOLNPAIR("Pause popup lines 3:", line3);
+
+      // Send only non-empty lines (use nullptr for empty lines to avoid leftover text)
+      ScreenHandler.sendinfoscreen(line1[0] ? line1 : nullptr,
+                                   line2[0] ? line2 : nullptr,
+                                   line3[0] ? line3 : nullptr,
+                                   pause_label,
+                                   false, false, false, false);
+    }
 
     // Delegate to centralized, mode-aware pause handler for the rest of the flow.
     CR6PauseHandler::HandlePauseMessage(ExtUI::pauseModeStatus, ExtUI::getPauseMode(), 0);
@@ -214,7 +346,7 @@ bool hasPrintTimer = false;
   void onPrintFinished() {
     ScreenHandler.OnPrintFinished();
   }
-  
+
   void onStoreSettings(char *buff) {
     ScreenHandler.StoreSettings(buff);
   }

@@ -2,19 +2,52 @@
 #include "DGUSDisplay.h"
 #include "DGUSScreenHandler.h"
 #include "creality_touch/DGUSDisplayDef.h"
+#include "creality_touch/PageHandlers.h"
+// Need thermalManager access to check hotend target
+#include "../../../module/temperature.h"
 
 namespace CR6PauseHandler {
+
+// Track the current pause mode state (similar to Jyers UI pattern)
+// Use the current pause mode to support conditional branching where needed
+// Set default to PAUSE_MODE_SAME (no change) then update on explicit mode changes
+static PauseMode current_pause_mode = PAUSE_MODE_SAME;
 
 void Init() {
   // No-op for now. Reserved for future setup (e.g., load localized strings).
 }
 
 void HandlePauseMessage(const PauseMessage message, const PauseMode mode, uint8_t extruder) {
+  // Update our tracked pause mode if explicitly set (preserve state on PAUSE_MODE_SAME)
+  if (mode != PAUSE_MODE_SAME) {
+    current_pause_mode = mode;
+    SERIAL_ECHOLNPAIR("CR6 Pause handler: pause mode updated to:", (int)current_pause_mode);
+  }
+  // Use the effective pause mode for all decisions
+  const PauseMode effective_mode = (mode != PAUSE_MODE_SAME) ? mode : current_pause_mode;
+  // Log the incoming pause message for debug (helps diagnose OPTION vs PURGE flows)
+  SERIAL_ECHOLNPAIR("CR6 Pause handler invoked message:", (int)message);
+  // Also log both the passed mode and effective mode
+  SERIAL_ECHOLNPAIR("CR6 Pause handler passed mode:", (int)mode);
+  SERIAL_ECHOLNPAIR("CR6 Pause handler effective mode:", (int)effective_mode);
+
   // Default behavior: delegate to the existing DGUS mapping in dgus_creality_lcd.
   // This function exists to centralize logic; callers can switch to using this
   // handler instead of calling the DGUS-specific code directly.
 
   // Example simple dispatch (mirror of existing behavior). Keep lightweight.
+  // If a Confirm screen is already active, most incoming pause messages
+  // should not override it. Create a small helper to Goto a screen only
+  // when it's allowed (or when we are explicitly asking to show CONFIRM).
+  const bool confirm_active = (ScreenHandler.getCurrentScreen() == DGUSLCD_SCREEN_CONFIRM) && DGUSScreenHandler::IsConfirmActive();
+  auto goto_screen_if_allowed = [&](DGUSLCD_Screens s) {
+    if (!confirm_active || s == DGUSLCD_SCREEN_CONFIRM) {
+      ScreenHandler.GotoScreen(s);
+    } else {
+      SERIAL_ECHOLNPGM("PauseModeHandler: skip overriding active CONFIRM screen");
+    }
+  };
+
   switch (message) {
     // PAUSE_MESSAGE_WAITING
     // English: "Pause this print?" (used when Marlin requests permission to pause)
@@ -25,18 +58,22 @@ void HandlePauseMessage(const PauseMessage message, const PauseMode mode, uint8_
     // `PrintPauseDialogHandler` behavior).
     case PAUSE_MESSAGE_WAITING:
       // PAUSE_MESSAGE_WAITING can be used for two different intents:
-      //  - A generic "Pause this print?" confirmation (PAUSE_MODE_PAUSE_PRINT)
-      //  - A filament-change continuation prompt when the pause mode indicates
-      //    we're in a filament-change flow (PAUSE_MODE_CHANGE_FILAMENT / LOAD / UNLOAD)
-      // Use the provided `mode` to choose the correct UI so the Continue button
-      // triggers the intended firmware action.
-  // For PAUSE_MESSAGE_WAITING show the programmable popup. The Marlin
-  // message has already been copied into VP_MSGSTR1..4 by
-  // ExtUI::onUserConfirmRequired(), so do not overwrite it here.
-  // Suppress mapping the popup info byte to a PauseMenuResponse so
-  // pressing Continue here does not accidentally signal "Resume".
-  DGUSScreenHandler::SetSuppressPopupPauseResponse(true);
-  ScreenHandler.GotoScreen(DGUSLCD_SCREEN_POPUP);
+      //  - A generic "Pause this print?" confirmation (PAUSE_MODE_PAUSE_PRINT when not in pause context)
+      //  - A filament-change continuation prompt when already in a pause/filament-change flow
+      // The key insight: if we get WAITING after PARKING/CHANGING, we're already in a pause
+      // context and should show PRINT_PAUSED regardless of the mode value.
+      // Only show POPUP for initial pause requests (when not already paused).
+      if (ExtUI::isPrintingPaused() ||
+          effective_mode == PAUSE_MODE_CHANGE_FILAMENT ||
+          effective_mode == PAUSE_MODE_LOAD_FILAMENT ||
+          effective_mode == PAUSE_MODE_UNLOAD_FILAMENT) {
+        // Show paused screen with RESUME button - we're already in a pause state
+        goto_screen_if_allowed(DGUSLCD_SCREEN_PRINT_PAUSED);
+      } else {
+        // For initial pause requests, show popup for user confirmation
+        DGUSScreenHandler::SetSuppressPopupPauseResponse(true);
+        goto_screen_if_allowed(DGUSLCD_SCREEN_POPUP);
+      }
       break;
 
   // PAUSE_MESSAGE_INSERT
@@ -53,7 +90,7 @@ void HandlePauseMessage(const PauseMessage message, const PauseMode mode, uint8_
       // the insert flow (setUserConfirmed()) instead of being interpreted
       // as a Resume command.
       DGUSScreenHandler::SetSuppressPopupPauseResponse(true);
-      ScreenHandler.GotoScreen(DGUSLCD_SCREEN_POPUP);
+      goto_screen_if_allowed(DGUSLCD_SCREEN_POPUP);
       break;
   // Use the programmable popup (#63) which provides a title (VP_MSGSTR4)
   // and three lines (VP_MSGSTR1..3) for text. For `PAUSE_MESSAGE_INSERT` the
@@ -77,9 +114,6 @@ void HandlePauseMessage(const PauseMessage message, const PauseMode mode, uint8_
   // characters). The example below uses short phrases tailored to the
   // popup layout.
   // The Marlin-provided message is already in VP_MSGSTR1..4; show the popup.
-  ScreenHandler.GotoScreen(DGUSLCD_SCREEN_CONFIRM);
-      break;
-
   // PAUSE_MESSAGE_OPTION / PAUSE_MESSAGE_PURGE
   // English intent: Marlin is asking whether to Resume (Continue) or to Purge/Extrude
   // more filament before continuing. This is the two-button decision point.
@@ -98,26 +132,6 @@ void HandlePauseMessage(const PauseMessage message, const PauseMode mode, uint8_
   // After the user makes a choice, always call ExtUI::setUserConfirmed() so Marlin
   // can act on the selected response.
     case PAUSE_MESSAGE_PURGE:
-      // Use the new INFOBOX screen for purge so the user is not shown actionable
-      // buttons while Marlin is busy purging. `DGUSLCD_SCREEN_INFOBOX` is a
-      // programmable information screen (ID 62) that supports:
-      //  - VP_MSGSTR1..VP_MSGSTR4 for up to four text lines
-      //  - VP_M117 and VP_M117_STATIC for dynamic/static M117-style messages
-      //  - an animated throbber icon to indicate activity
-      //
-      // Mark a synchronous operation so the ScreenHandler will enable the
-      // busy/throbber animation and disable interactive controls (back button).
-      // Call `SetSynchronousOperationFinish()` once the purge completes (in the
-      // code path that handles purge completion) so the UI returns to normal.
-    ScreenHandler.BeginPurgeOperation();
-
-    // The Marlin purge message is expected to be provided in the message VP
-    // by onUserConfirmRequired(); show the infobox (with busy animation)
-    // while the purge operation is in progress.
-    ScreenHandler.GotoScreen(DGUSLCD_SCREEN_INFOBOX);
-      break;
-    // The duplicate purge info was removed; handled above.
-    break;
     // PAUSE_MESSAGE_HEAT / PAUSE_MESSAGE_HEATING
     // English: "Heat" / "Reheating" (Marlin is re-heating nozzle/bed before continuing)
     // Expected user action: usually none – Marlin will wait for temperature. Show the
@@ -130,17 +144,35 @@ void HandlePauseMessage(const PauseMessage message, const PauseMode mode, uint8_
       // re-heat/rehoming flow. Suppress mapping the popup button into
       // PAUSE_RESPONSE_* so pressing Continue only releases the wait and
       // lets Marlin handle re-heating.
-      DGUSScreenHandler::SetSuppressPopupPauseResponse(true);
-      ScreenHandler.GotoScreen(DGUSLCD_SCREEN_POPUP);
+  DGUSScreenHandler::SetSuppressPopupPauseResponse(true);
+  goto_screen_if_allowed(DGUSLCD_SCREEN_POPUP);
       // Do NOT clear suppression here; it will be cleared by the
       // ScreenChangeHook when the popup is handled (pop returns).
       break;
-    case PAUSE_MESSAGE_HEATING:
+    case PAUSE_MESSAGE_HEATING: {
       // Clear suppression so subsequent popups behave normally.
       DGUSScreenHandler::SetSuppressPopupPauseResponse(false);
-      // While actively heating, show info box to indicate progress.
-      ScreenHandler.GotoScreen(DGUSLCD_SCREEN_INFOBOX);
+      // Only present the HEATING info box when the hotend actually has a
+      // non-zero target (i.e., it's being heated) OR when we're in a
+      // filament-change related mode which expects reheating. For common
+      // bed-first prints the nozzle target is 0 and we should not show
+      // the "Nozzle heating" INFOBOX.
+      if (thermalManager.degTargetHotend(active_extruder) > 0 ||
+          effective_mode == PAUSE_MODE_CHANGE_FILAMENT ||
+          effective_mode == PAUSE_MODE_LOAD_FILAMENT ||
+          effective_mode == PAUSE_MODE_UNLOAD_FILAMENT) {
+        // Act normally and show the heating info box
+        goto_screen_if_allowed(DGUSLCD_SCREEN_INFOBOX);
+      }
+      else {
+        // No nozzle heating expected; show paused screen with a status
+        // message so Resume remains available and avoid showing the
+        // misleading heating dialog.
+        ScreenHandler.setstatusmessage("Nozzle idle");
+        goto_screen_if_allowed(DGUSLCD_SCREEN_PRINT_PAUSED);
+      }
       break;
+    }
     // PAUSE_MESSAGE_PARKING / PAUSE_MESSAGE_CHANGING / PAUSE_MESSAGE_UNLOAD / PAUSE_MESSAGE_LOAD
     // English: Typically used for the filament-change flow. Example messages: "Parking",
     // "Changing filament", "Unload filament", "Load filament".
@@ -153,16 +185,32 @@ void HandlePauseMessage(const PauseMessage message, const PauseMode mode, uint8_
     // Important: do not auto-enter FEED here; present the paused screen to give users
     // the option to navigate to Tune/Feed or other actions.
     case PAUSE_MESSAGE_PARKING:
-      ScreenHandler.GotoScreen(DGUSLCD_SCREEN_INFOBOX);
+      // Present the paused screen so the user can access Feed/Tune and
+      // crucially use the Resume button which now maps to the pause-handshake
+      // when Marlin is waiting. This avoids hiding the resume action behind
+      // an infobox which does not expose the RESUME control.
+      
+      // Restore any interrupted blocking heating targets immediately when parking starts
+      // so the nozzle can heat back up while parked, rather than waiting for resume
+      restore_blocking_heating_cr6();
+      
+      goto_screen_if_allowed(DGUSLCD_SCREEN_PRINT_PAUSED);
       break;
     case PAUSE_MESSAGE_CHANGING:
-      ScreenHandler.GotoScreen(DGUSLCD_SCREEN_INFOBOX);
+      // Show the "Wait for filament change to start" message during M600 initialization
+      goto_screen_if_allowed(DGUSLCD_SCREEN_INFOBOX);
       break;
     case PAUSE_MESSAGE_UNLOAD:
-      ScreenHandler.GotoScreen(DGUSLCD_SCREEN_INFOBOX);
+      // Show unload message in status field instead of changing screen
+      // since this is typically a background operation, not requiring
+      // user interaction via RESUME button.
+      ScreenHandler.setstatusmessage("Unloading filament...");
       break;
     case PAUSE_MESSAGE_LOAD:
-      ScreenHandler.GotoScreen(DGUSLCD_SCREEN_INFOBOX);
+      // Show load message in status field instead of changing screen
+      // since this is typically a background operation, not requiring
+      // user interaction via RESUME button.
+      ScreenHandler.setstatusmessage("Loading filament...");
       break;
 
     // PAUSE_MESSAGE_RESUME / PAUSE_MESSAGE_STATUS / default
@@ -171,12 +219,42 @@ void HandlePauseMessage(const PauseMessage message, const PauseMode mode, uint8_
     // We set the pause_menu_response to RESUME and call setUserConfirmed() to release
     // the hold so Marlin continues.
     case PAUSE_MESSAGE_RESUME:
-      ScreenHandler.GotoScreen(DGUSLCD_SCREEN_INFOBOX);
+      ScreenHandler.setstatusmessage("Resuming...");
+      goto_screen_if_allowed(DGUSLCD_SCREEN_INFOBOX);
+      break;
+    case PAUSE_MESSAGE_OPTION:
+      // Show a two-button confirm dialog (Continue vs Purge) only if Marlin is
+      // actually waiting for user input. During resume, this is just status.
+      // Only show the interactive "Load more / Filament?" dialog when we're
+      // in a generic purge/option flow. For an explicit LOAD_FILAMENT mode the
+      // UI should not override the Feed/Load screen with this popup; instead
+      // show a status message so the user can continue using the Load UI.
+      if (ExtUI::isWaitingOnUser() && effective_mode != PAUSE_MODE_LOAD_FILAMENT) {
+        // User interaction required - show interactive dialog
+        DGUSScreenHandler::SetSuppressPopupPauseResponse(false);
+        ScreenHandler.sendinfoscreen(
+          PSTR("Load more"),
+          PSTR("Filament?"),
+          PSTR("[No=Resume]"),
+          nullptr,
+          true, true, true, true
+        );
+        // goto_screen_if_allowed(DGUSLCD_SCREEN_CONFIRM);
+        ScreenHandler.setstatusmessage("Resuming print...");
+      } else {
+        // Resume in progress or explicit Load flow - show status message only
+        ScreenHandler.setstatusmessage("Resuming print...");
+      }
       break;
     case PAUSE_MESSAGE_STATUS:
+      // STATUS messages are informational only - do not set pause responses
+      // or call setUserConfirmed() as this can interfere with normal operation.
+      // Just ignore the message or optionally update status display.
+      break;
     default:
-      ExtUI::setPauseMenuResponse(PAUSE_RESPONSE_RESUME_PRINT);
-      ExtUI::setUserConfirmed();
+      // For unknown messages, we should not automatically resume
+      // Log the message for debugging but take no action
+      SERIAL_ECHOLNPAIR("CR6 Pause handler: unknown message ", (int)message);
       break;
   }
 }
