@@ -216,6 +216,8 @@ public:
     static void DGUSLCD_SD_SendFilename(DGUS_VP_Variable &var);
     /// Marlin informed us that a new SD has been inserted.
     static void SDCardInserted();
+    /// Marlin informed us that the SD Card has been mounted successfully.
+    static void SDCardMounted();
     /// Marlin informed us that the SD Card has been removed().
     static void SDCardRemoved();
     /// Marlin informed us about a bad SD Card.
@@ -446,6 +448,7 @@ static void Buzzer(const uint16_t frequency, const uint16_t duration);
   static inline bool IsScreenComplete() { return ScreenComplete; }
 
   static inline DGUSLCD_Screens getCurrentScreen() { return current_screen; }
+  static bool IsConfirmActive();
 
   static bool HandlePendingUserConfirmation();
 

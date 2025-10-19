@@ -11,6 +11,7 @@
 #include "../../../../module/planner.h"
 #include "../../../../feature/pause.h"
 #include "../../../../gcode/gcode.h"
+#include "../../../../MarlinCore.h"
 
 #if ENABLED(FILAMENT_RUNOUT_SENSOR)
 #include "../../../../feature/runout.h"
@@ -42,16 +43,20 @@ static void store_blocking_heating_cr6() {
 #endif
 }
 
-static void restore_blocking_heating_cr6() {
+void restore_blocking_heating_cr6() {
     if (!cr6_stored_blocking_wait) return;
         char buf[32];
-        if (cr6_stored_hotend_target > 0) {
-            snprintf(buf, sizeof(buf), "M104 S%u", (uint16_t)cr6_stored_hotend_target);
+        // Only restore hotend target if it was actually heating (> 0) AND is not currently heating
+        // Use non-blocking M104 to avoid re-entering blocking wait
+        if (cr6_stored_hotend_target > 0 && thermalManager.degTargetHotend(0) == 0) {
+            snprintf(buf, sizeof(buf), "M109 S%u", (uint16_t)cr6_stored_hotend_target);
             ExtUI::injectCommands(buf);
         }
 #if HAS_HEATED_BED
-        if (cr6_stored_bed_target > 0) {
-            snprintf(buf, sizeof(buf), "M140 S%u", (uint16_t)cr6_stored_bed_target);
+        // Only restore bed target if it was actually heating (> 0) AND is not currently heating
+        // Use non-blocking M140 to avoid re-entering blocking wait
+        if (cr6_stored_bed_target > 0 && thermalManager.degTargetBed() == 0) {
+            snprintf(buf, sizeof(buf), "M190 S%u", (uint16_t)cr6_stored_bed_target);
             ExtUI::injectCommands(buf);
         }
 #endif
@@ -327,10 +332,31 @@ void PrintPausedMenuHandler(DGUS_VP_Variable &var, unsigned short buttonValue) {
 #if ENABLED(FILAMENT_RUNOUT_SENSOR)
                         runout.reset();
 #endif
-            // Mirror Pause/Stop: show a small confirmation dialog before
-            // actually resuming. The user's response on that dialog will
-            // perform the pause-handshake or resume command.
-            ScreenHandler.GotoScreen(DGUSLCD_SCREEN_DIALOG_RESUME);
+            // Mirror Pause/Stop: previously the UI presented a small confirmation
+            // dialog (DIALOG_RESUME) before actually resuming. For pause-handshake
+            // flows (filament change / purge) Marlin may be waiting on a user
+            // confirmation; in that case we should treat this RESUME control as
+            // performing the same handshake (setPauseMenuResponse + setUserConfirmed)
+            // that the Confirm/Popup dialog would have done. If Marlin is not
+            // waiting, preserve the old behavior and show the small resume
+            // confirmation dialog.
+            
+            // Break any blocking heater waits during resume (like we do for pause)
+            wait_for_heatup = false;
+            #if HAS_RESUME_CONTINUE
+            wait_for_user = false;
+            #endif
+            
+            if (ExtUI::isWaitingOnUser()) {
+            #if ENABLED(ADVANCED_PAUSE_FEATURE)
+                ExtUI::setPauseMenuResponse(PAUSE_RESPONSE_RESUME_PRINT);
+            #endif
+                ExtUI::setUserConfirmed();
+                ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING);
+            }
+            else {
+                ScreenHandler.GotoScreen(DGUSLCD_SCREEN_DIALOG_RESUME);
+            }
         break;
 
         case VP_BUTTON_ADJUSTENTERKEY:
@@ -349,11 +375,17 @@ void PrintPauseDialogHandler(DGUS_VP_Variable &var, unsigned short buttonValue) 
             switch (buttonValue) {
                 case 2:
                     // User confirmed Pause: we will cancel any blocking waits
-                    // (M109/M190/M0 etc.) by issuing an M108. Save the current
-                    // blocking-heating state locally so we can restore targets
-                    // later from the same UI module without modifying global API.
+                    // (M109/M190/M0 etc.) by directly setting the wait flags.
+                    // Save the current blocking-heating state locally so we can
+                    // restore targets later from the same UI module without
+                    // modifying global API.
                     store_blocking_heating_cr6();
-                    ExtUI::injectCommands(F("M108")); // break wait loops
+                    
+                    // Break wait loops immediately (equivalent to M108)
+                    wait_for_heatup = false;
+                    #if HAS_RESUME_CONTINUE
+                    wait_for_user = false;
+                    #endif
 
                     ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_PAUSED);
                     ScreenHandler.setstatusmessagePGM(PSTR("Pausing print - please wait..."));
@@ -385,6 +417,13 @@ void PrintResumeDialogHandler(DGUS_VP_Variable &var, unsigned short buttonValue)
                     #if ENABLED(FILAMENT_RUNOUT_SENSOR)
                         runout.reset();
                     #endif
+                    
+                    // Break any blocking heater waits during resume (like we do for pause)
+                    wait_for_heatup = false;
+                    #if HAS_RESUME_CONTINUE
+                    wait_for_user = false;
+                    #endif
+                    
                     if (ExtUI::isWaitingOnUser()) {
                         #if ENABLED(ADVANCED_PAUSE_FEATURE)
                         ExtUI::setPauseMenuResponse(PAUSE_RESPONSE_RESUME_PRINT);
@@ -393,10 +432,6 @@ void PrintResumeDialogHandler(DGUS_VP_Variable &var, unsigned short buttonValue)
                     }
                     else {
                         ExtUI::resumePrint();
-                        // If the pause previously interrupted a blocking heat,
-                        // restore the targets (as non-blocking set-target commands)
-                        // so heating resumes but we do not re-enter a blocking wait.
-                        restore_blocking_heating_cr6();
                     }
                     ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING);
                     break;

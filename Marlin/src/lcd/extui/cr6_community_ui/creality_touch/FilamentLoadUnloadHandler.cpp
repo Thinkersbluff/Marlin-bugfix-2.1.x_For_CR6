@@ -101,7 +101,7 @@ void FilamentLoadUnloadHandler::ChangeFilamentWithTemperature(PGM_P command) {
         // load_filament(slow_load_length, fast_load_length, purge_length, ...)
         const float slow_load_length = FILAMENT_CHANGE_SLOW_LOAD_LENGTH;
         const float fast_load_length = ABS(length);
-        const float purge_length = length; // use handler length for purge
+        const float purge_length = 0;
 
         SERIAL_ECHOPAIR("load_filament: slow=", slow_load_length);
         SERIAL_ECHOPAIR(" fast=", fast_load_length);

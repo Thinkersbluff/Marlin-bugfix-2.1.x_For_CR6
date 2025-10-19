@@ -9,3 +9,6 @@ struct PageHandler {
 };
 
 void DGUSCrealityDisplay_HandleReturnKeyEvent(DGUS_VP_Variable &var, void *val_ptr);
+
+// CR6-specific blocking heating state management
+void restore_blocking_heating_cr6();
