@@ -389,7 +389,7 @@ void PrintPauseDialogHandler(DGUS_VP_Variable &var, unsigned short buttonValue) 
 
                     ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_PAUSED);
                     ScreenHandler.setstatusmessagePGM(PSTR("Pausing print - please wait..."));
-                    ExtUI::pausePrint();
+                    ExtUI::injectCommands_P(PSTR("M1125 P"));
 
                     break;
 
@@ -431,7 +431,7 @@ void PrintResumeDialogHandler(DGUS_VP_Variable &var, unsigned short buttonValue)
                         ExtUI::setUserConfirmed();
                     }
                     else {
-                        ExtUI::resumePrint();
+                        ExtUI::injectCommands_P(PSTR("M1125 R"));
                     }
                     ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING);
                     break;
@@ -461,7 +461,7 @@ void PrintFinishMenuHandler(DGUS_VP_Variable &var, unsigned short buttonValue) {
 void FilamentRunoutHandler(DGUS_VP_Variable &var, unsigned short buttonValue) {
     switch (var.VP){
         case VP_BUTTON_RESUMEPRINTKEY:
-            ExtUI::resumePrint();
+            ExtUI::injectCommands_P(PSTR("M1125 R"));
             ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING);
         break;
 

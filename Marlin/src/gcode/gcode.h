@@ -1328,6 +1328,9 @@ private:
     static void M1001();
   #endif
 
+  // Custom Pause/Resume used by CR6 community UI
+  static void M1125();
+
   #if DGUS_LCD_UI_MKS
     static void M1002();
   #endif

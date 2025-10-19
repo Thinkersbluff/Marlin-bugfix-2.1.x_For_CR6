@@ -8,23 +8,33 @@
 
 namespace CR6PauseHandler {
 
-// Track the current pause mode state (similar to Jyers UI pattern)
-// Use the current pause mode to support conditional branching where needed
-// Set default to PAUSE_MODE_SAME (no change) then update on explicit mode changes
+// Track the current pause mode state (when available). Provide a local
+// fallback for builds without ADVANCED_PAUSE_FEATURE so logic that queries
+// the current mode still compiles; behavior will be simplified.
+#if ENABLED(ADVANCED_PAUSE_FEATURE)
 static PauseMode current_pause_mode = PAUSE_MODE_SAME;
+#else
+static int current_pause_mode = 0; // fallback
+#endif
 
 void Init() {
   // No-op for now. Reserved for future setup (e.g., load localized strings).
 }
 
+#if ENABLED(ADVANCED_PAUSE_FEATURE)
 void HandlePauseMessage(const PauseMessage message, const PauseMode mode, uint8_t extruder) {
+#else
+// Fallback no-op handler when advanced pause is disabled. Keep minimal
+// behavior to show paused screen on park messages so the UI remains useful.
+void HandlePauseMessage(int message, int mode, uint8_t extruder) {
+#endif
   // Update our tracked pause mode if explicitly set (preserve state on PAUSE_MODE_SAME)
   if (mode != PAUSE_MODE_SAME) {
     current_pause_mode = mode;
     SERIAL_ECHOLNPAIR("CR6 Pause handler: pause mode updated to:", (int)current_pause_mode);
   }
   // Use the effective pause mode for all decisions
-  const PauseMode effective_mode = (mode != PAUSE_MODE_SAME) ? mode : current_pause_mode;
+  const auto effective_mode = (mode != PAUSE_MODE_SAME) ? mode : current_pause_mode;
   // Log the incoming pause message for debug (helps diagnose OPTION vs PURGE flows)
   SERIAL_ECHOLNPAIR("CR6 Pause handler invoked message:", (int)message);
   // Also log both the passed mode and effective mode

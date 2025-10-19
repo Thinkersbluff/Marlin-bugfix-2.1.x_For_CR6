@@ -185,7 +185,9 @@ namespace ExtUI {
 
   // Generic notification stubs used by core
   void onPrinterKilled(FSTR_P const error, FSTR_P const component);
+#if ENABLED(ADVANCED_PAUSE_FEATURE)
   void onPauseMode(PauseMessage m, PauseMode mm, uint8_t extruder);
+#endif
   void onMediaMounted();
   void onSettingsStored(bool ok);
   void onSettingsLoaded(bool ok);
@@ -196,4 +198,93 @@ namespace ExtUI {
   void onHeatingError(const heater_id_t h);
 
 } // namespace ExtUI
+
+#if !ENABLED(ADVANCED_PAUSE_FEATURE)
+// Provide lightweight fallbacks so CR6 UI code that references pause enums
+// and a pause-mode status compiles even when ADVANCED_PAUSE_FEATURE is off.
+namespace ExtUI {
+  // Minimal numeric constants matching pause.h when ADVANCED_PAUSE_FEATURE is enabled
+  enum PauseMessageFallback : char {
+    PAUSE_MESSAGE_PARKING = 0,
+    PAUSE_MESSAGE_CHANGING,
+    PAUSE_MESSAGE_WAITING,
+    PAUSE_MESSAGE_INSERT,
+    PAUSE_MESSAGE_LOAD,
+    PAUSE_MESSAGE_UNLOAD,
+    PAUSE_MESSAGE_PURGE,
+    PAUSE_MESSAGE_OPTION,
+    PAUSE_MESSAGE_RESUME,
+    PAUSE_MESSAGE_HEAT,
+    PAUSE_MESSAGE_HEATING,
+    PAUSE_MESSAGE_STATUS,
+    PAUSE_MESSAGE_COUNT
+  };
+
+  enum PauseModeFallback : char {
+    PAUSE_MODE_SAME = 0,
+    PAUSE_MODE_PAUSE_PRINT,
+    PAUSE_MODE_CHANGE_FILAMENT,
+    PAUSE_MODE_LOAD_FILAMENT,
+    PAUSE_MODE_UNLOAD_FILAMENT
+  };
+
+  // Provide a modifiable pauseModeStatus so UI code can still read it.
+  extern PauseMessageFallback pauseModeStatus;
+  inline PauseModeFallback getPauseMode() { return PAUSE_MODE_SAME; }
+}
+#endif
+
+// Provide unqualified symbols/macros that older CR6 UI code expects to be
+// present in the global namespace. These map to the namespaced ExtUI:: enums
+// defined above so files that reference plain PAUSE_MESSAGE_* or PAUSE_MODE_*
+// constants still compile when ADVANCED_PAUSE_FEATURE is disabled.
+#if !ENABLED(ADVANCED_PAUSE_FEATURE)
+  // Pause messages
+  #define PAUSE_MESSAGE_PARKING    ExtUI::PAUSE_MESSAGE_PARKING
+  #define PAUSE_MESSAGE_CHANGING   ExtUI::PAUSE_MESSAGE_CHANGING
+  #define PAUSE_MESSAGE_WAITING    ExtUI::PAUSE_MESSAGE_WAITING
+  #define PAUSE_MESSAGE_INSERT     ExtUI::PAUSE_MESSAGE_INSERT
+  #define PAUSE_MESSAGE_LOAD       ExtUI::PAUSE_MESSAGE_LOAD
+  #define PAUSE_MESSAGE_UNLOAD     ExtUI::PAUSE_MESSAGE_UNLOAD
+  #define PAUSE_MESSAGE_PURGE      ExtUI::PAUSE_MESSAGE_PURGE
+  #define PAUSE_MESSAGE_OPTION     ExtUI::PAUSE_MESSAGE_OPTION
+  #define PAUSE_MESSAGE_RESUME     ExtUI::PAUSE_MESSAGE_RESUME
+  #define PAUSE_MESSAGE_HEAT       ExtUI::PAUSE_MESSAGE_HEAT
+  #define PAUSE_MESSAGE_HEATING    ExtUI::PAUSE_MESSAGE_HEATING
+  #define PAUSE_MESSAGE_STATUS     ExtUI::PAUSE_MESSAGE_STATUS
+
+  // Pause modes
+  #define PAUSE_MODE_SAME             ExtUI::PAUSE_MODE_SAME
+  #define PAUSE_MODE_PAUSE_PRINT      ExtUI::PAUSE_MODE_PAUSE_PRINT
+  #define PAUSE_MODE_CHANGE_FILAMENT  ExtUI::PAUSE_MODE_CHANGE_FILAMENT
+  #define PAUSE_MODE_LOAD_FILAMENT    ExtUI::PAUSE_MODE_LOAD_FILAMENT
+  #define PAUSE_MODE_UNLOAD_FILAMENT  ExtUI::PAUSE_MODE_UNLOAD_FILAMENT
+
+  // Filament-change related configuration defaults (conservative values)
+  #ifndef FILAMENT_CHANGE_SLOW_LOAD_LENGTH
+    #define FILAMENT_CHANGE_SLOW_LOAD_LENGTH 100.0f
+  #endif
+  #ifndef FILAMENT_CHANGE_ALERT_BEEPS
+    #define FILAMENT_CHANGE_ALERT_BEEPS 1
+  #endif
+
+  // Provide minimal no-op stubs for load_filament / unload_filament so UI code
+  // that calls these functions still links when ADVANCED_PAUSE_FEATURE is off.
+  // Match the real prototypes closely so argument counts align.
+  static inline bool load_filament(
+    const float slow_load_length = 0,
+    const float fast_load_length = 0,
+    const float purge_length = 0,
+    const int8_t max_beep_count = 0,
+    const bool show_lcd = false,
+    const bool pause_for_user = false,
+    int /*mode*/ = PAUSE_MODE_SAME
+  ) { (void)slow_load_length; (void)fast_load_length; (void)purge_length; (void)max_beep_count; (void)show_lcd; (void)pause_for_user; return false; }
+
+  static inline bool unload_filament(
+    const float unload_length,
+    const bool show_lcd = false,
+    int /*mode*/ = PAUSE_MODE_SAME
+  ) { (void)unload_length; (void)show_lcd; return false; }
+#endif
 

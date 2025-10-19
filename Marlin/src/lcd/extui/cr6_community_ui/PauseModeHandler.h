@@ -17,7 +17,13 @@ namespace CR6PauseHandler {
   // Called whenever Marlin requests a user confirmation for a pause mode.
   // The implementation should decide which DGUS screen to show and which
   // actions (setPauseMenuResponse(), setUserConfirmed(), etc.) to set.
+#if ENABLED(ADVANCED_PAUSE_FEATURE)
   void HandlePauseMessage(const PauseMessage message, const PauseMode mode, uint8_t extruder);
+#else
+  // Fallback signature when ADVANCED_PAUSE_FEATURE is disabled so that
+  // callers can still link without needing PauseMessage/PauseMode types.
+  void HandlePauseMessage(int message, int mode, uint8_t extruder);
+#endif
 
 } // namespace CR6PauseHandler
 

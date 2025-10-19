@@ -49,7 +49,18 @@ namespace ExtUI {
 #endif
 
   void onPrinterKilled(FSTR_P const error, FSTR_P const component) { (void)error; (void)component; }
+#if ENABLED(ADVANCED_PAUSE_FEATURE)
   void onPauseMode(PauseMessage m, PauseMode mm, uint8_t extruder) { stdOnPauseMode(m, mm, extruder); }
+#else
+  // ADVANCED_PAUSE_FEATURE disabled: provide a no-op stub so callers can still
+  // call ExtUI::onPauseMode() without needing the pause enums/types.
+  void onPauseMode(int /*m*/, int /*mm*/, uint8_t /*extruder*/) { /* no-op */ }
+#endif
+
+#if !ENABLED(ADVANCED_PAUSE_FEATURE)
+  // Define the fallback pauseModeStatus required by DGUS UI code
+  PauseMessageFallback pauseModeStatus = PAUSE_MESSAGE_STATUS;
+#endif
   void onMediaMounted() {
     #if ENABLED(SDSUPPORT)
       ScreenHandler.setstatusmessage("SD Card Ready");

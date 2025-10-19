@@ -1,6 +1,16 @@
 #include "../../../../inc/MarlinConfigPre.h"
 #if ENABLED(DGUS_LCD_UI_CR6_COMM)
 
+#if !ENABLED(ADVANCED_PAUSE_FEATURE)
+    // Provide conservative defaults for filament-change constants expected by the UI
+    #ifndef FILAMENT_CHANGE_SLOW_LOAD_LENGTH
+        #define FILAMENT_CHANGE_SLOW_LOAD_LENGTH 10.0f
+    #endif
+    #ifndef FILAMENT_CHANGE_ALERT_BEEPS
+        #define FILAMENT_CHANGE_ALERT_BEEPS 10
+    #endif
+#endif
+
 #include "../DGUSDisplayDef.h"
 #include "../DGUSDisplay.h"
 #include "../DGUSScreenHandler.h"
@@ -108,14 +118,29 @@ void FilamentLoadUnloadHandler::ChangeFilamentWithTemperature(PGM_P command) {
         SERIAL_ECHOPAIR(" purge=", purge_length);
         SERIAL_ECHOPGM("\n");
 
-        load_filament(
-            slow_load_length, fast_load_length, purge_length,
-            FILAMENT_CHANGE_ALERT_BEEPS,
-            true,                                           // show_lcd
-            thermalManager.still_heating(ExtUI::E0),        // pause_for_user
-            PAUSE_MODE_LOAD_FILAMENT                        // pause_mode
-            OPTARG(DUAL_X_CARRIAGE, 0)                      // Dual X target (0 for default)
-        );
+                #if ENABLED(ADVANCED_PAUSE_FEATURE)
+                    load_filament(
+                        slow_load_length, fast_load_length, purge_length,
+                        FILAMENT_CHANGE_ALERT_BEEPS,
+                        true,                                           // show_lcd
+                        thermalManager.still_heating(ExtUI::E0),        // pause_for_user
+                        PAUSE_MODE_LOAD_FILAMENT                        // pause_mode
+                        OPTARG(DUAL_X_CARRIAGE, 0)                      // Dual X target (0 for default)
+                    );
+                #else
+                    // Basic fallback: perform a simple extrude to load filament.
+                    // Use a conservative feedrate and update planner positions.
+                    const float feedrate_mm_s = 5.0f; // conservative 5 mm/s
+                    const float extrude_len = fast_load_length;
+                    // Simple extrude: buffer a line that only advances E.
+                    xyze_pos_t dest = current_position;
+                    dest.e += extrude_len;
+                    planner.buffer_line(dest, feedrate_mm_s, TERN0(HAS_EXTRUDERS, active_extruder));
+                    planner.synchronize();
+                    // Update planner/current E position to reflect extrusion
+                    current_position[E_AXIS] = dest.e;
+                    planner.set_e_position_mm(dest.e);
+                #endif
         // Ensure any temporary status/infobox is cleared and the UI returns to the Feed screen
         ScreenHandler.setstatusmessagePGM(nullptr);
         ScreenHandler.PopToOldScreen();
@@ -124,9 +149,20 @@ void FilamentLoadUnloadHandler::ChangeFilamentWithTemperature(PGM_P command) {
         // For unload, call unload_filament with negative length
         const float unload_length = -ABS(length);
 
-    SERIAL_ECHOPAIR("unload_filament: length=", unload_length);
-    SERIAL_ECHOPGM("\n");
-    unload_filament(unload_length, true, PAUSE_MODE_UNLOAD_FILAMENT);
+        SERIAL_ECHOPAIR("unload_filament: length=", unload_length);
+        SERIAL_ECHOPGM("\n");
+        #if ENABLED(ADVANCED_PAUSE_FEATURE)
+            unload_filament(unload_length, true, PAUSE_MODE_UNLOAD_FILAMENT);
+        #else
+            // Basic fallback: perform a simple retract (negative extrusion)
+            const float feedrate_mm_s = 5.0f;
+            xyze_pos_t dest = current_position;
+            dest.e += unload_length; // unload_length is negative for retract
+            planner.buffer_line(dest, feedrate_mm_s, TERN0(HAS_EXTRUDERS, active_extruder));
+            planner.synchronize();
+            current_position[E_AXIS] = dest.e;
+            planner.set_e_position_mm(dest.e);
+        #endif
     // Ensure any temporary status/infobox is cleared and the UI returns to the Feed screen
     ScreenHandler.setstatusmessagePGM(nullptr);
     ScreenHandler.PopToOldScreen();
