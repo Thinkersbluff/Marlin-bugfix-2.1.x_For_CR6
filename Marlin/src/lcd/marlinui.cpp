@@ -66,6 +66,10 @@ MarlinUI ui;
   #include "../module/temperature.h"
 #endif
 
+#if ENABLED(DGUS_LCD_UI_CR6_COMM)
+  #include "../gcode/custom/M1125.h"
+#endif
+
 #if LCD_HAS_WAIT_FOR_MOVE
   bool MarlinUI::wait_for_move; // = false
 #endif
@@ -1764,7 +1768,11 @@ uint8_t expand_u8str_P(char * const outstr, PGM_P const ptpl, const int8_t ind, 
   void MarlinUI::abort_print() {
     #if HAS_MEDIA
       wait_for_heatup = wait_for_user = false;
-      if (card.isStillPrinting())
+      // If printing (active) or paused from media, schedule an SD abort so
+      // the main loop runs abortSDPrinting() which clears queues, parks
+      // and disables heaters. Previously a paused SD print would fall
+      // through to closefile(), leaving heaters enabled and head unparked.
+      if (card.isStillPrinting() || card.isPaused())
         card.abortFilePrintSoon();
       else if (card.isMounted())
         card.closefile();
@@ -1835,7 +1843,14 @@ uint8_t expand_u8str_P(char * const outstr, PGM_P const ptpl, const int8_t ind, 
     #ifdef ACTION_ON_RESUME
       hostui.resume();
     #endif
+    // Avoid starting the print job timer if M1125 has suppressed auto-starts
+    // while it owns a deterministic pause. startOrResumeJob() and other
+    // callers are also guarded, but ensure the UI path respects suppression too.
+#if ENABLED(DGUS_LCD_UI_CR6_COMM)
+    if (!M1125_IsAutoJobTimerSuppressed()) print_job_timer.start(); // Also called by M24
+#else
     print_job_timer.start(); // Also called by M24
+#endif
   }
 
   #if HAS_TOUCH_BUTTONS

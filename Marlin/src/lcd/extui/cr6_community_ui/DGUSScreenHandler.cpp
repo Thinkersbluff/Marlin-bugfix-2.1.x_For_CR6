@@ -45,6 +45,16 @@
 #include "../../../module/printcounter.h"
 #include "../../../feature/caselight.h"
 
+// Forward declarations of M1125 helpers (defined in M1125.cpp)
+bool M1125_CheckAndHandleHeaterTimeout();
+uint32_t M1125_TimeoutRemainingSeconds();
+uint32_t M1125_TimeoutOldRemainingAtContinue();
+uint32_t M1125_TimeoutIntervalSeconds();
+void M1125_TimeoutContinue();
+void M1125_TimeoutContinueAction();
+void M1125_TimeoutDisable();
+bool M1125_IsPauseActive();
+
 #if ENABLED(POWER_LOSS_RECOVERY)
   #include "../../../feature/powerloss.h"
 #endif
@@ -287,6 +297,14 @@ void DGUSScreenHandler::Buzzer(const uint16_t frequency, const uint16_t duration
 }
 #else
 void DGUSScreenHandler::Buzzer(const uint16_t frequency, const uint16_t duration) { UNUSED(frequency); UNUSED(duration); }
+
+// Lightweight adapter used by other modules that don't want to include
+// the full DGUSScreenHandler header. Forwards to the class method.
+#if ENABLED(DGUS_LCD_UI_CR6_COMM)
+void DGUS_Buzzer(const uint16_t duration, const uint16_t frequency) {
+  DGUSScreenHandler::Buzzer(frequency, duration);
+}
+#endif
 #endif
 
 void DGUSScreenHandler::OnPowerlossResume() {
@@ -892,14 +910,24 @@ void DGUSScreenHandler::ScreenConfirmedOK(DGUS_VP_Variable &var, void *val_ptr) 
   // Map the high-byte "info" into pause responses (Resume / Purge) the same
   // way ScreenChangeHook does, then release the wait and pop the screen.
   if (ExtUI::isWaitingOnUser() && (current_screen == DGUSLCD_SCREEN_POPUP || current_screen == DGUSLCD_SCREEN_CONFIRM)) {
-    uint8_t info = (uint8_t)(button_value >> 8);
+   
     // Debug: show the raw value and whether suppression is active
     SERIAL_ECHOPAIR("DWIN VP_CONFIRMED value=0x", button_value);
     SERIAL_ECHOLNPAIR(" suppress_popup_pause_response=", suppress_popup_pause_response);
 
+    // If the confirmation maps to a registered VP that provides a
+    // set_by_display_handler, invoke it so the VP emulation path handles
+    // any specialized logic (for example: M1125 heater-timeout).
+    if (ConfirmVP) {
+      DGUS_VP_Variable ramcopy;
+      if (populate_VPVar(ConfirmVP, &ramcopy) && ramcopy.set_by_display_handler) {
+        ramcopy.set_by_display_handler(ramcopy, val_ptr);
+      }
+    }
+
     if (!suppress_popup_pause_response) {
 #if ENABLED(ADVANCED_PAUSE_FEATURE)
-      switch (info) {
+      switch ((uint8_t)(button_value >> 8)) {
         case 0x01: // Continue / Resume
           ExtUI::setPauseMenuResponse(PAUSE_RESPONSE_RESUME_PRINT);
           break;
@@ -909,7 +937,7 @@ void DGUSScreenHandler::ScreenConfirmedOK(DGUS_VP_Variable &var, void *val_ptr) 
         default:
           break;
       }
-#endif
+#endif // ENABLED(ADVANCED_PAUSE_FEATURE)
     }
 
     ExtUI::setUserConfirmed();
@@ -933,6 +961,30 @@ void DGUSScreenHandler::ScreenConfirmedOK(DGUS_VP_Variable &var, void *val_ptr) 
   DGUS_VP_Variable ramcopy;
   if (!populate_VPVar(ConfirmVP, &ramcopy)) return;
   if (ramcopy.set_by_display_handler) ramcopy.set_by_display_handler(ramcopy, val_ptr);
+}
+
+// Handler for dedicated M1125 heater-timeout Confirm VP. This is invoked
+// via the VP helper table emulation path so both VP_CONFIRMED and
+// VP_SCREENCHANGE return paths converge here.
+void DGUSScreenHandler::HandleM1125TimeoutConfirm(DGUS_VP_Variable &var, void *val_ptr) {
+  uint16_t raw = swap16(*(uint16_t*)val_ptr);
+
+  // Debug logging to help correlate display payloads with behavior
+  SERIAL_ECHOPAIR("M1125 timeout confirm handler raw=0x", raw);
+
+  if (raw == 0x0002) {
+    SERIAL_ECHOLNPGM("M1125 Confirm handler: YES (0x0002) -> Continue action");
+    M1125_TimeoutContinueAction();
+  }
+  else if (raw == 0x0001) {
+    SERIAL_ECHOLNPGM("M1125 Confirm handler: NO (0x0001) -> no action (allow timeout)");
+    // NO: intentionally do nothing here. Let the timeout elapse.
+  }
+
+  // NOTE: Do NOT clear the Marlin wait or pop the popup here. The caller
+  // (ScreenConfirmedOK / ScreenChangeHook) is responsible for releasing
+  // the user wait and popping the screen exactly once. This keeps
+  // the UI flow centralized and avoids duplicate pop actions.
 }
 
 #if HAS_MESH
@@ -1285,13 +1337,20 @@ void DGUSScreenHandler::ScreenChangeHook(DGUS_VP_Variable &var, void *val_ptr) {
   SERIAL_ECHOLNPAIR(" target=0x", target_byte);
   SERIAL_ECHOLNPAIR(" suppress_popup_pause_response=", suppress_popup_pause_response);
 
+      // If the current Confirm maps to a registered VP with a
+      // set_by_display_handler, invoke it. This makes the VP helper
+      // emulation path the single canonical handler for Confirm returns.
+      if (ConfirmVP) {
+        DGUS_VP_Variable ramcopy;
+        if (populate_VPVar(ConfirmVP, &ramcopy) && ramcopy.set_by_display_handler) {
+          ramcopy.set_by_display_handler(ramcopy, val_ptr);
+        }
+      }
+
     // If suppression is not set, map info codes into the pause menu
     // response so Marlin can take the corresponding action (resume vs purge).
-    // Some popups (like heater-timeout) should not set a response and should
-    // only release the wait; PauseModeHandler can temporarily set suppression
-    // to ensure that behavior.
     if (!suppress_popup_pause_response) {
-  #if ENABLED(ADVANCED_PAUSE_FEATURE)
+#if ENABLED(ADVANCED_PAUSE_FEATURE)
       switch (info) {
         case 0x01: // display encoded "Continue" action
           ExtUI::setPauseMenuResponse(PAUSE_RESPONSE_RESUME_PRINT);
@@ -1302,7 +1361,7 @@ void DGUSScreenHandler::ScreenChangeHook(DGUS_VP_Variable &var, void *val_ptr) {
         default:
           break;
       }
-  #endif
+#endif
     }
 
     // Finally, release Marlin's wait and pop the popup screen
@@ -1971,6 +2030,76 @@ bool DGUSScreenHandler::loop() {
       ScreenHandler.setstatusmessage(delayed_status_buffer);
       // Schedule clearing after 10 seconds
       delayed_status_clear_at = ms2 + 10000;
+    }
+  }
+
+  // Let M1125's pause heater-timeout handler run in the UI loop so that
+  // the DGUS UI can display a safe message when heaters are disabled.
+  if (M1125_CheckAndHandleHeaterTimeout()) {
+    // Post a visible status message on the DGUS screen so the user knows
+    // heaters were disabled due to pause timeout. Keep it displayed for 10s.
+    ScreenHandler.PostDelayedStatusMessage_P(PSTR("Heaters disabled due to pause timeout"), 0);
+    // Also make sure the paused screen reflects the heater-off state
+    ScreenHandler.setstatusmessagePGM(PSTR("Heaters disabled (timeout)"));
+  }
+
+  // If a popup-based heater-timeout is pending, update the VP_M117 countdown
+  // Show a non-intrusive countdown in the status line for heater timeout.
+  // Behavior:
+  //  - After the nozzle has been parked and the "Nozzle Parked." status
+  //    has been visible for 10 seconds, begin showing a countdown:
+  //      "Heaters timeout in xx seconds"
+  //  - Update that countdown no more frequently than every 5 seconds.
+  //  - If the graceful popup window is active (M1125 reports a short
+  //    grace remaining), show that remaining instead. Clear when resume
+  //    completes.
+  static bool m1125_pause_was_active = false;
+  static millis_t m1125_pause_start_ms = 0;
+  static millis_t m1125_next_countdown_update = 0;
+  const millis_t now = millis();
+
+  const bool pause_active = M1125_IsPauseActive();
+
+  // Detect pause start/stop transitions so we can timestamp the park event
+  if (pause_active && !m1125_pause_was_active) {
+    // Pause just started: record when "Nozzle Parked." was shown
+    m1125_pause_start_ms = now;
+    m1125_next_countdown_update = 0; // force immediate scheduling after delay
+    m1125_pause_was_active = true;
+  }
+  else if (!pause_active && m1125_pause_was_active) {
+    // Pause ended: clear any countdown/status we may have set
+    m1125_pause_start_ms = 0;
+    m1125_next_countdown_update = 0;
+    m1125_pause_was_active = false;
+    // Only clear if there's no delayed status that should take precedence
+    if (!delayed_status_until) ScreenHandler.setstatusmessage("");
+  }
+
+  // While paused, maybe show the countdown after the initial 10s hold
+  if (pause_active) {
+    // Only begin after the "Nozzle Parked." has been visible for 10s
+    if (m1125_pause_start_ms && ELAPSED(now, m1125_pause_start_ms + 10000)) {
+      if (m1125_next_countdown_update == 0 || ELAPSED(now, m1125_next_countdown_update)) {
+        m1125_next_countdown_update = now + 5000;
+
+        // Prefer the short-grace remaining reported by M1125 if active
+        uint32_t rem = M1125_TimeoutRemainingSeconds();
+        if (rem == 0) {
+          // No grace window active yet: compute remaining until the
+          // initial idle timeout based on pause_start + configured interval
+          const uint32_t interval = M1125_TimeoutIntervalSeconds();
+          const long diff = (long)((m1125_pause_start_ms + SEC_TO_MS(interval)) - now);
+          rem = (diff > 0) ? ((uint32_t)((diff + 999) / 1000)) : 0;
+        }
+
+        // Format and post the countdown, but don't override delayed_status
+        if (rem > 0 && !delayed_status_until) {
+          char buf[VP_M117_LEN] = {0};
+          sprintf_P(buf, PSTR("Heaters timeout in %u seconds"), (unsigned)rem);
+          ScreenHandler.setstatusmessage(buf);
+        }
+      }
     }
   }
 

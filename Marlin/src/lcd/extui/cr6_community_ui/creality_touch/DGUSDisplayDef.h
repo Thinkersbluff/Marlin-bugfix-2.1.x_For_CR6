@@ -125,6 +125,11 @@ constexpr uint16_t VP_CONFIRMED = 0x219E; // OK on confirm screen.
 // constexpr uint16_t VP_SD_ScrollEvent = 0x2020; // Data: 0 for "up a directory", numbers are the amount to scroll, e.g -1 one up, 1 one down
 // constexpr uint16_t VP_SD_FileSelected = 0x2022; // Number of file field selected.
 constexpr uint16_t VP_SD_FileSelectConfirm = 0x2024; // (This is a virtual VP and emulated by the Confirm Screen when a file has been confirmed)
+// Dedicated virtual VP used by M1125 for the heater-timeout Confirm dialog.
+// NOTE: previous value 0x20FF overlapped the SD filename VP region
+// (VP_SD_FileName2). Use a non-overlapping VP just after the filename
+// region so we don't collide with the file-list VPs.
+constexpr uint16_t VP_M1125_TIMEOUT_CONFIRM = 0x2140;
 
 // constexpr uint16_t VP_SD_ResumePauseAbort = 0x2026; // Resume(Data=0), Pause(Data=1), Abort(Data=2) SD Card prints
 constexpr uint16_t VP_SD_AbortPrintConfirmed = 0x2028; // Abort print confirmation (virtual, will be injected by the confirm dialog)

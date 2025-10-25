@@ -37,6 +37,9 @@
 #include "../../lcd/marlinui.h"
 
 #include "../../MarlinCore.h" // for startOrResumeJob, etc.
+#if ENABLED(DGUS_LCD_UI_CR6_COMM)
+#include "../../gcode/custom/M1125.h"
+#endif
 
 #if ENABLED(PRINTJOB_TIMER_AUTOSTART)
   #include "../../module/printcounter.h"
@@ -104,6 +107,12 @@ void GcodeSuite::M104_M109(const bool isM109) {
     #if ENABLED(SINGLENOZZLE_STANDBY_TEMP)
       thermalManager.singlenozzle_temp[target_extruder] = temp;
       if (target_extruder != active_extruder) return;
+    #endif
+    SERIAL_ECHO("[DEBUG] M104/M109: setTargetHotend -> ");
+    SERIAL_ECHOLN(temp);
+    #if ENABLED(DGUS_LCD_UI_CR6_COMM)
+      SERIAL_ECHO("[DEBUG] M104/M109: M1125 suppression=");
+      SERIAL_ECHOLN(M1125_IsAutoJobTimerSuppressed());
     #endif
     thermalManager.setTargetHotend(temp, target_extruder);
 

@@ -124,6 +124,18 @@
   // Use MarlinUI for a buzzer on the LCD
   #define BUZZ(V...) ui.buzz(V)
 
+#elif ENABLED(DGUS_LCD_UI_CR6_COMM)
+
+  // Use a lightweight DGUS buzzer adapter header to avoid pulling in
+  // the entire DGUS screen handler from every translation unit.
+  #include "../lcd/extui/cr6_community_ui/DGUSBuzzer.h"
+
+  static inline void dgus_buzz_adapter(const uint16_t duration, const uint16_t frequency = 0) {
+    DGUS_Buzzer(duration, frequency);
+  }
+
+  #define BUZZ(V...) dgus_buzz_adapter(V)
+
 #else
 
   // No buzz capability

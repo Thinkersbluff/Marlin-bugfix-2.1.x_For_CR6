@@ -33,6 +33,11 @@
 #include "../lcd/marlinui.h"
 #include "../inc/MarlinConfig.h"
 
+// Optional debug instrumentation: include M1125 accessor so we can detect when
+// blocking moves occur while M1125 pause is active. Enable debug logging by
+// defining DEBUG_M1125_PAUSE_MOVE_LOGGING in your build flags.
+#include "../gcode/custom/M1125.h"
+
 #if IS_SCARA
   #include "../libs/buzzer.h"
   #include "../lcd/marlinui.h"
@@ -882,6 +887,13 @@ void _internal_move_to_destination(const feedRate_t fr_mm_s/*=0.0f*/
  */
 void do_blocking_move_to(NUM_AXIS_ARGS_(const float) const feedRate_t fr_mm_s/*=0.0f*/) {
   DEBUG_SECTION(log_move, "do_blocking_move_to", DEBUGGING(LEVELING));
+#if ENABLED(DEBUG_BLOCKING_MOVE)
+  SERIAL_ECHOLNPGM("[DBG] do_blocking_move_to target X=", x);
+  SERIAL_ECHOLNPGM("[DBG] do_blocking_move_to target Y=", y);
+  #if HAS_Z_AXIS
+    SERIAL_ECHOLNPGM("[DBG] do_blocking_move_to target Z=", z);
+  #endif
+#endif
   #if NUM_AXES
     if (DEBUGGING(LEVELING)) DEBUG_XYZ("> ", NUM_AXIS_ARGS_LC());
   #endif
@@ -897,6 +909,18 @@ void do_blocking_move_to(NUM_AXIS_ARGS_(const float) const feedRate_t fr_mm_s/*=
     if (!position_is_reachable(x, y)) return;
     destination = current_position;          // sync destination at the start
   #endif
+
+#if ENABLED(DEBUG_M1125_PAUSE_MOVE_LOGGING)
+  // If M1125 owns paused state, log the attempted blocking move targets so we
+  // can trace who invoked a move while paused.
+  if (M1125_IsPauseActive()) {
+    SERIAL_ECHOLNPGM("[DBG-M1125] do_blocking_move_to while pause active -> X=", x);
+    SERIAL_ECHOLNPGM("[DBG-M1125] do_blocking_move_to while pause active -> Y=", y);
+    #if HAS_Z_AXIS
+      SERIAL_ECHOLNPGM("[DBG-M1125] do_blocking_move_to while pause active -> Z=", z);
+    #endif
+  }
+#endif
 
   #if ENABLED(DELTA)
 

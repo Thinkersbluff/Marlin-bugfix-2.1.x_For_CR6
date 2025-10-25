@@ -40,6 +40,8 @@
 // Centralized pause-mode handler for CR6 UI.
 #include "PauseModeHandler.h"
 
+#include "../../../module/printcounter.h"
+
 #if ENABLED(POWER_LOSS_RECOVERY)
   #include "../../../feature/powerloss.h"
 #endif
@@ -103,9 +105,16 @@ bool hasPrintTimer = false;
   }
 
   void onPrintTimerPaused() {
-    // Handle M28 Pause SD print - But only if we're not waiting on a user
-    if (ExtUI::isPrintingFromMediaPaused() && ScreenHandler.getCurrentScreen() == DGUSLCD_SCREEN_PRINT_RUNNING && !ExtUI::isWaitingOnUser()) {
-      ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_PAUSED);
+    // Handle pause events. Treat either a media (SD) pause or the
+    // print-job timer being paused as a signal to show the PAUSED
+    // screen. This covers the M1125 flow where the firmware pauses
+    // the job timer immediately but the SD subsystem may still be
+    // flushing/writing PLR and hasn't set card.isPaused() yet.
+    if ((ExtUI::isPrintingFromMediaPaused() || print_job_timer.isPaused()) && !ExtUI::isWaitingOnUser()) {
+      // Don't override an active Confirm dialog
+      if (!(ScreenHandler.getCurrentScreen() == DGUSLCD_SCREEN_CONFIRM && ScreenHandler.IsConfirmActive())) {
+        ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_PAUSED);
+      }
     }
   }
 
@@ -148,8 +157,10 @@ bool hasPrintTimer = false;
         ExtUI::getPauseMode() == PAUSE_MODE_LOAD_FILAMENT ||
         ExtUI::getPauseMode() == PAUSE_MODE_UNLOAD_FILAMENT))) {
       SERIAL_ECHOLNPGM("onUserConfirmRequired: PARKING/CHANGING/WAITING(filament) - skip VP update, show normal screen");
-      // Let the centralized pause handler process the message to show PRINT_PAUSED screen
-      CR6PauseHandler::HandlePauseMessage(ExtUI::pauseModeStatus, ExtUI::getPauseMode(), 0);
+  // Let the centralized pause handler process the message to show PRINT_PAUSED screen
+#if ENABLED(ADVANCED_PAUSE_FEATURE)
+  CR6PauseHandler::HandlePauseMessage(ExtUI::pauseModeStatus, ExtUI::getPauseMode(), 0);
+#endif
       return;
     }
 
@@ -163,10 +174,12 @@ bool hasPrintTimer = false;
     // and a ConfirmVP has been set.
     if (ScreenHandler.getCurrentScreen() == DGUSLCD_SCREEN_CONFIRM && ScreenHandler.IsConfirmActive()) {
       SERIAL_ECHOLNPGM("onUserConfirmRequired: Confirm already active - skipping VP update to avoid overwrite");
-      // Still let the centralized pause handler process the logical pause
-      // message (it might toggle suppression or other state), but do not
-      // modify the visible VP lines.
-      CR6PauseHandler::HandlePauseMessage(ExtUI::pauseModeStatus, ExtUI::getPauseMode(), 0);
+  // Still let the centralized pause handler process the logical pause
+  // message (it might toggle suppression or other state), but do not
+  // modify the visible VP lines.
+#if ENABLED(ADVANCED_PAUSE_FEATURE)
+  CR6PauseHandler::HandlePauseMessage(ExtUI::pauseModeStatus, ExtUI::getPauseMode(), 0);
+#endif
       return;
     }
     // Previously the FEED (load/unload) screen auto-confirmed here which
@@ -300,8 +313,10 @@ bool hasPrintTimer = false;
                                    false, false, false, false);
     }
 
-    // Delegate to centralized, mode-aware pause handler for the rest of the flow.
-    CR6PauseHandler::HandlePauseMessage(ExtUI::pauseModeStatus, ExtUI::getPauseMode(), 0);
+  // Delegate to centralized, mode-aware pause handler for the rest of the flow.
+#if ENABLED(ADVANCED_PAUSE_FEATURE)
+  CR6PauseHandler::HandlePauseMessage(ExtUI::pauseModeStatus, ExtUI::getPauseMode(), 0);
+#endif
   }
 
   void onStatusChanged(const char * const msg) { ScreenHandler.setstatusmessage(msg); }

@@ -37,6 +37,11 @@
 #include "planner.h"
 #include "printcounter.h"
 
+#if ENABLED(DGUS_LCD_UI_CR6_COMM)
+  // M1125 suppression API (prevent auto-start of print timer while M1125 pause is active)
+  #include "../gcode/custom/M1125.h"
+#endif
+
 #if ANY(HAS_COOLER, LASER_COOLANT_FLOW_METER)
   #include "../feature/cooler.h"
   #include "../feature/spindle_laser.h"
@@ -3597,6 +3602,13 @@ void Temperature::disable_all_heaters() {
   }
 
   void Temperature::auto_job_check_timer(const bool can_start, const bool can_stop) {
+#if ENABLED(DGUS_LCD_UI_CR6_COMM)
+    // If M1125 has requested suppression of automatic job-start behavior
+    // (e.g., while a deterministic pause is active), do nothing here so
+    // the pause state isn't accidentally cleared by temperature updates.
+    if (M1125_IsAutoJobTimerSuppressed()) return;
+#endif
+
     if (auto_job_over_threshold()) {
       if (can_start) startOrResumeJob();
     }

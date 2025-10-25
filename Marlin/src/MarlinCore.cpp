@@ -58,6 +58,10 @@
 #include "gcode/parser.h"
 #include "gcode/queue.h"
 
+#if ENABLED(DGUS_LCD_UI_CR6_COMM)
+#include "gcode/custom/M1125.h"
+#endif
+
 #include "feature/pause.h"
 #include "sd/cardreader.h"
 
@@ -358,6 +362,13 @@ bool printingIsPaused() {
 }
 
 void startOrResumeJob() {
+  // If M1125 has temporarily suppressed auto job starts (deterministic pause),
+  // do not start or resume the job here. That prevents other modules (temperature,
+  // UI, SD handlers) from inadvertently restarting printing while M1125 owns the pause.
+#if ENABLED(DGUS_LCD_UI_CR6_COMM)
+  if (M1125_IsAutoJobTimerSuppressed()) return;
+#endif
+
   if (!printingIsPaused()) {
     TERN_(GCODE_REPEAT_MARKERS, repeat.reset());
     TERN_(CANCEL_OBJECTS, cancelable.reset());

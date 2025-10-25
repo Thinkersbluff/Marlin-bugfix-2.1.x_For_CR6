@@ -8,26 +8,19 @@
 
 namespace CR6PauseHandler {
 
-// Track the current pause mode state (when available). Provide a local
-// fallback for builds without ADVANCED_PAUSE_FEATURE so logic that queries
-// the current mode still compiles; behavior will be simplified.
+// Track the current pause mode state. Only present when advanced pause is
+// enabled; callers must be guarded so this module can be omitted safely.
 #if ENABLED(ADVANCED_PAUSE_FEATURE)
 static PauseMode current_pause_mode = PAUSE_MODE_SAME;
-#else
-static int current_pause_mode = 0; // fallback
 #endif
 
 void Init() {
   // No-op for now. Reserved for future setup (e.g., load localized strings).
 }
 
+// Only compile the centralized pause handler when advanced pause is enabled.
 #if ENABLED(ADVANCED_PAUSE_FEATURE)
 void HandlePauseMessage(const PauseMessage message, const PauseMode mode, uint8_t extruder) {
-#else
-// Fallback no-op handler when advanced pause is disabled. Keep minimal
-// behavior to show paused screen on park messages so the UI remains useful.
-void HandlePauseMessage(int message, int mode, uint8_t extruder) {
-#endif
   // Update our tracked pause mode if explicitly set (preserve state on PAUSE_MODE_SAME)
   if (mode != PAUSE_MODE_SAME) {
     current_pause_mode = mode;
@@ -154,8 +147,8 @@ void HandlePauseMessage(int message, int mode, uint8_t extruder) {
       // re-heat/rehoming flow. Suppress mapping the popup button into
       // PAUSE_RESPONSE_* so pressing Continue only releases the wait and
       // lets Marlin handle re-heating.
-  DGUSScreenHandler::SetSuppressPopupPauseResponse(true);
-  goto_screen_if_allowed(DGUSLCD_SCREEN_POPUP);
+      DGUSScreenHandler::SetSuppressPopupPauseResponse(true);
+      goto_screen_if_allowed(DGUSLCD_SCREEN_POPUP);
       // Do NOT clear suppression here; it will be cleared by the
       // ScreenChangeHook when the popup is handled (pop returns).
       break;
@@ -268,5 +261,7 @@ void HandlePauseMessage(int message, int mode, uint8_t extruder) {
       break;
   }
 }
+
+#endif // ENABLED(ADVANCED_PAUSE_FEATURE)
 
 } // namespace CR6PauseHandler

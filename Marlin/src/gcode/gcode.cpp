@@ -605,7 +605,11 @@ void GcodeSuite::process_parsed_command(bool no_ok/*=false*/) {
         TERN_(HOST_PROMPT_SUPPORT, case 876:)
         break;
       #endif
-
+      #if ENABLED(DGUS_LCD_UI_CR6_COMM) && DISABLED(ADVANCED_PAUSE_FEATURE)
+        // Custom CR6 community UI Pause/Resume (P=park, R=resume)
+        // Handler implemented in Marlin/src/gcode/custom/M1125.cpp
+        case 1125: M1125(); break;
+      #endif
       #if ENABLED(HOST_KEEPALIVE_FEATURE)
         case 113: M113(); break;                                  // M113: Set Host Keepalive interval
       #endif
@@ -789,7 +793,7 @@ void GcodeSuite::process_parsed_command(bool no_ok/*=false*/) {
         #endif
       #endif
 
-      #if HAS_SOUND
+      #if ANY(HAS_SOUND, HAS_BEEPER, HAS_BUZZER, USE_MARLINUI_BUZZER)
         case 300: M300(); break;                                  // M300: Play beep tone
       #endif
 

@@ -382,7 +382,7 @@ void PrintPauseDialogHandler(DGUS_VP_Variable &var, unsigned short buttonValue) 
                     store_blocking_heating_cr6();
                     
                     // Break wait loops immediately (equivalent to M108)
-                    wait_for_heatup = false;
+                    // wait_for_heatup = false;
                     #if HAS_RESUME_CONTINUE
                     wait_for_user = false;
                     #endif

@@ -150,11 +150,28 @@ static bool ensure_safe_temperature(const bool wait=true, const PauseMode mode=P
   DEBUG_ECHOLNPGM("... wait:", wait, " mode:", mode);
 
   #if ENABLED(PREVENT_COLD_EXTRUSION)
-    if (!DEBUGGING(DRYRUN) && thermalManager.targetTooColdToExtrude(active_extruder))
+    // Only set EXTRUDE_MINTEMP if target is lower than the current target temperature.
+    // Respect user-set temperatures above this range to avoid interfering
+    // with high-temp filaments like PETG/ASA during Load Filament operations.
+    // Also, don't force heating during pause/resume cycles unless specifically
+    // in a filament change mode that requires extrusion.
+    const celsius_t current_target = thermalManager.degTargetHotend(active_extruder);
+    if (!DEBUGGING(DRYRUN) && current_target < thermalManager.extrude_min_temp &&
+        (mode == PAUSE_MODE_CHANGE_FILAMENT || mode == PAUSE_MODE_LOAD_FILAMENT || mode == PAUSE_MODE_UNLOAD_FILAMENT))
       thermalManager.setTargetHotend(thermalManager.extrude_min_temp, active_extruder);
   #endif
 
   ui.pause_show_message(PAUSE_MESSAGE_HEATING, mode);
+
+  // If we were asked NOT to wait (non-blocking) and there is no hotend
+  // target temperature set, there's nothing to wait for. Returning true
+  // avoids entering the non-blocking wait loop which can spin forever
+  // when the target is 0 (common for bed-first prints).
+  if (!wait && thermalManager.degTargetHotend(active_extruder) <= 0
+      && mode == PAUSE_MODE_SAME) {
+    SERIAL_ECHOLNPGM("ensure_safe_temperature: non-blocking and degTargetHotend==0 - nothing to wait for");
+    return true;
+  }
 
   #if ENABLED(SOVOL_SV06_RTS)
     rts.gotoPage(ID_Cold_L, ID_Cold_D);
@@ -165,6 +182,7 @@ static bool ensure_safe_temperature(const bool wait=true, const PauseMode mode=P
 
   // Allow interruption by Emergency Parser M108
   wait_for_heatup = TERN1(PREVENT_COLD_EXTRUSION, !thermalManager.allow_cold_extrude);
+  SERIAL_ECHOLNPGM("ensure_safe_temperature: wait:", wait, " mode:", mode, " degTargetHotend:", thermalManager.degTargetHotend(active_extruder));
   while (wait_for_heatup && ABS(thermalManager.wholeDegHotend(active_extruder) - thermalManager.degTargetHotend(active_extruder)) > (TEMP_WINDOW))
     idle();
   wait_for_heatup = false;
@@ -199,6 +217,7 @@ bool load_filament(const float slow_load_length/*=0*/, const float fast_load_len
   DEBUG_ECHOLNPGM("... slowlen:", slow_load_length, " fastlen:", fast_load_length, " purgelen:", purge_length, " maxbeep:", max_beep_count, " showlcd:", show_lcd, " pauseforuser:", pause_for_user, " pausemode:", mode DXC_SAY);
 
   if (!ensure_safe_temperature(false, mode)) {
+    SERIAL_ECHOLNPGM("load_filament: ensure_safe_temperature returned false (caller=load_filament)");
     if (show_lcd) ui.pause_show_message(PAUSE_MESSAGE_STATUS, mode);
     return false;
   }
@@ -370,6 +389,7 @@ bool unload_filament(const float unload_length, const bool show_lcd/*=false*/,
   #endif
 
   if (!ensure_safe_temperature(false, mode)) {
+    SERIAL_ECHOLNPGM("unload_filament: ensure_safe_temperature returned false (caller=unload_filament)");
     if (show_lcd) ui.pause_show_message(PAUSE_MESSAGE_STATUS);
     return false;
   }
@@ -574,6 +594,21 @@ void wait_for_confirmation(const bool is_reload/*=false*/, const int8_t max_beep
     // Wait for the user to press the button to re-heat the nozzle, then
     // re-heat the nozzle, re-show the continue prompt, restart idle timers, start over
     if (nozzle_timed_out) {
+      // If the nozzle timed out but there was no active hotend target when
+      // pausing (common when a print starts by heating the bed first),
+      // skip the re-heat UI and simply re-show the continue prompt. This
+      // prevents presenting the "Nozzle heating" INFOBOX unnecessarily.
+      const celsius_t current_target = thermalManager.degTargetHotend(active_extruder);
+      if (current_target <= 0) {
+        SERIAL_ECHOLNPGM("wait_for_confirmation: nozzle timed out but degTargetHotend==0 - skipping reheat");
+        // Re-show the prompt to continue and restart idle timers
+        show_continue_prompt(is_reload);
+        HOTEND_LOOP() thermalManager.heater_idle[e].start(nozzle_timeout);
+        nozzle_timed_out = false;
+        first_impatient_beep(max_beep_count);
+        continue;
+      }
+
       ui.pause_show_message(PAUSE_MESSAGE_HEAT);
       #if ENABLED(SOVOL_SV06_RTS)
         rts.updateTempE0();
@@ -689,8 +724,24 @@ void resume_print(
   if (targetTemp > thermalManager.degTargetHotend(active_extruder))
     thermalManager.setTargetHotend(targetTemp, active_extruder);
 
-  // Load the new filament
-  load_filament(slow_load_length, fast_load_length, purge_length, max_beep_count, show_lcd, nozzle_timed_out, PAUSE_MODE_SAME DXC_PASS);
+  // Load the new filament only when necessary. If the nozzle was not
+  // previously heating (common when a print starts by heating the bed
+  // first) we must avoid calling load_filament(), which calls
+  // ensure_safe_temperature() and will present a "Nozzle heating" UI.
+  // Only perform the filament load workflow when:
+  //  - the nozzle timed out while paused, or
+  //  - an explicit load/purge length was requested, or
+  //  - the nozzle currently has a non-zero target temperature (was heating).
+  SERIAL_ECHOLNPGM("resume_print: nozzle_timed_out:", nozzle_timed_out, " targetTemp:", targetTemp, " degTargetHotend:", thermalManager.degTargetHotend(active_extruder));
+
+  if ( nozzle_timed_out
+    || slow_load_length > 0
+    || fast_load_length > 0
+    || purge_length > 0
+    || thermalManager.degTargetHotend(active_extruder) > 0
+  ) {
+    load_filament(slow_load_length, fast_load_length, purge_length, max_beep_count, show_lcd, nozzle_timed_out, PAUSE_MODE_SAME DXC_PASS);
+  }
 
   if (targetTemp > 0) {
     thermalManager.setTargetHotend(targetTemp, active_extruder);
@@ -699,11 +750,17 @@ void resume_print(
 
   ui.pause_show_message(PAUSE_MESSAGE_RESUME);
 
-  // Check Temperature before moving hotend
-  ensure_safe_temperature(DISABLED(BELTPRINTER));
+  // Check Temperature before moving hotend - but only if we're actually going to retract
+  // AND if the nozzle was originally being heated (targetTemp > 0 indicates this)
+  // This prevents unwanted heating when pausing during bed-only heating scenarios
+  if (PAUSE_PARK_RETRACT_LENGTH > 0 && targetTemp > 0) {
+    ensure_safe_temperature(DISABLED(BELTPRINTER));
+  }
 
-  // Retract to prevent oozing
-  unscaled_e_move(-(PAUSE_PARK_RETRACT_LENGTH), feedRate_t(PAUSE_PARK_RETRACT_FEEDRATE));
+  // Retract to prevent oozing (only if we ensured safe temperature above)
+  if (PAUSE_PARK_RETRACT_LENGTH > 0 && targetTemp > 0) {
+    unscaled_e_move(-(PAUSE_PARK_RETRACT_LENGTH), feedRate_t(PAUSE_PARK_RETRACT_FEEDRATE));
+  }
 
   if (!axes_should_home()) {
     // Move XY back to saved position

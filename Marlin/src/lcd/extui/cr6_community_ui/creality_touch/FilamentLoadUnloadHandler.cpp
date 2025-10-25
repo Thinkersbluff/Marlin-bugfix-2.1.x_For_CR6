@@ -27,6 +27,12 @@
 
 celsius_t FilamentLoadUnloadHandler::nozzle_temperature = 0;
 float FilamentLoadUnloadHandler::length = 0;
+// When ADVANCED_PAUSE_FEATURE is disabled we provide conservative, local
+// defaults for a short purge before unload and a pause duration to let the
+// purge finish before performing the retract. These are file-scope so the
+// UI can be tweaked here without changing headers.
+static float purge_length = 5.0f;        // mm to extrude before retract
+static millis_t unload_delay_ms = 2000;   // ms to wait after purge before retract
 
 void FilamentLoadUnloadHandler::Init() {
 #if HAS_PREHEAT
@@ -143,7 +149,7 @@ void FilamentLoadUnloadHandler::ChangeFilamentWithTemperature(PGM_P command) {
                 #endif
         // Ensure any temporary status/infobox is cleared and the UI returns to the Feed screen
         ScreenHandler.setstatusmessagePGM(nullptr);
-        ScreenHandler.PopToOldScreen();
+        // ScreenHandler.PopToOldScreen();
     }
     else if (strstr_P(command, PSTR("M702"))) {
         // For unload, call unload_filament with negative length
@@ -154,10 +160,26 @@ void FilamentLoadUnloadHandler::ChangeFilamentWithTemperature(PGM_P command) {
         #if ENABLED(ADVANCED_PAUSE_FEATURE)
             unload_filament(unload_length, true, PAUSE_MODE_UNLOAD_FILAMENT);
         #else
-            // Basic fallback: perform a simple retract (negative extrusion)
+            // Basic fallback when ADVANCED_PAUSE_FEATURE is disabled:
+            // 1) extrude a short purge to ensure filament exit (purge_length)
+            // 2) wait unload_delay_ms for the purge to complete
+            // 3) perform the retract (negative extrusion) by unload_length
             const float feedrate_mm_s = 5.0f;
+
+            // 1) Purge: advance E by purge_length
             xyze_pos_t dest = current_position;
-            dest.e += unload_length; // unload_length is negative for retract
+            dest.e += purge_length;
+            planner.buffer_line(dest, feedrate_mm_s, TERN0(HAS_EXTRUDERS, active_extruder));
+            planner.synchronize();
+            current_position[E_AXIS] = dest.e;
+            planner.set_e_position_mm(dest.e);
+
+            // 2) Wait for the purge to finish (cooperative delay)
+            GcodeSuite::dwell(unload_delay_ms);
+
+            // 3) Retract: move E back by unload_length (unload_length is negative)
+            dest = current_position;
+            dest.e += unload_length; // unload_length already negative for retract
             planner.buffer_line(dest, feedrate_mm_s, TERN0(HAS_EXTRUDERS, active_extruder));
             planner.synchronize();
             current_position[E_AXIS] = dest.e;
@@ -165,7 +187,7 @@ void FilamentLoadUnloadHandler::ChangeFilamentWithTemperature(PGM_P command) {
         #endif
     // Ensure any temporary status/infobox is cleared and the UI returns to the Feed screen
     ScreenHandler.setstatusmessagePGM(nullptr);
-    ScreenHandler.PopToOldScreen();
+    // ScreenHandler.PopToOldScreen();
     }
 
     SERIAL_ECHOPGM_P("- done");

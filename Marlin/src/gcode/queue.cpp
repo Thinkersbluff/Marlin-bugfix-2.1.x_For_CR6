@@ -153,6 +153,8 @@ bool GCodeQueue::process_injected_command_P() {
 
   // Execute command if non-blank
   if (i) {
+    SERIAL_ECHOLNPGM("[DBG] process_injected_command_P: injecting -> ");
+    SERIAL_ECHOLN(cmd);
     parser.parse(cmd);
     gcode.process_parsed_command();
   }

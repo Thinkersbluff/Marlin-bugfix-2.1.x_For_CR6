@@ -94,6 +94,10 @@ public:
 
   static void HandleDevelopmentTestButton(DGUS_VP_Variable &var, void *val_ptr);
 
+  // Handler for M1125 heater-timeout Confirm (VP_M1125_TIMEOUT_CONFIRM)
+  // Expects a 16-bit payload: 0x0002 == YES (Continue), 0x0001 == NO (Do nothing)
+  static void HandleM1125TimeoutConfirm(DGUS_VP_Variable &var, void *val_ptr);
+
   /// "M117" Message -- msg is a RAM ptr.
   static void setstatusmessage(const char* msg);
   /// The same for messages from Flash

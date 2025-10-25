@@ -8,6 +8,13 @@
 // to DGUS screens and user interactions. The goal is to avoid scattering
 // pause handling logic across the codebase and to provide a single place to
 // extend behavior (localization, alternate flows, conditional navigation).
+//
+// Note for maintainers: the centralized handler is only present when
+// ADVANCED_PAUSE_FEATURE is enabled. Call sites should be guarded with
+// #if ENABLED(ADVANCED_PAUSE_FEATURE) so this module can be safely omitted
+// from builds that don't use Marlin's advanced pause machinery. This avoids
+// accidental mismatched signatures and makes the codebase easier to reason
+// about when advanced pause is disabled.
 
 namespace CR6PauseHandler {
 
@@ -20,9 +27,11 @@ namespace CR6PauseHandler {
 #if ENABLED(ADVANCED_PAUSE_FEATURE)
   void HandlePauseMessage(const PauseMessage message, const PauseMode mode, uint8_t extruder);
 #else
-  // Fallback signature when ADVANCED_PAUSE_FEATURE is disabled so that
-  // callers can still link without needing PauseMessage/PauseMode types.
-  void HandlePauseMessage(int message, int mode, uint8_t extruder);
+  // When ADVANCED_PAUSE_FEATURE is disabled the centralized pause handler
+  // is not available. Callers must guard calls with #if ENABLED(ADVANCED_PAUSE_FEATURE)
+  // so that no unreferenced fallback is compiled. This avoids mismatched
+  // signatures and makes removal of the fallback safe.
+  // NOTE: Do not declare a fallback signature here; callers should be guarded.
 #endif
 
 } // namespace CR6PauseHandler

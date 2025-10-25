@@ -107,14 +107,16 @@ const uint16_t VPList_Main[] PROGMEM = {
 };
 
 const uint16_t VPList_SDFileList[] PROGMEM = {
-  VPList_CommonWithStatus,
-
+  // Prioritize file name VPs so the display receives all filename strings
+  // even when the transmit buffer is constrained by other common status VPs.
   VP_SD_FileName0,
   VP_SD_FileName1,
   VP_SD_FileName2,
   VP_SD_FileName3,
   VP_SD_FileName4,
   VP_SD_FileName5,
+
+  VPList_CommonWithStatus,
 
   0x0000
 };
@@ -710,6 +712,9 @@ const struct DGUS_VP_Variable ListOfVP[] PROGMEM = {
   VPHELPER(VP_SD_ScrollEvent, nullptr, ScreenHandler.DGUSLCD_SD_ScrollFilelist, nullptr),
   VPHELPER(VP_SD_FileSelected, nullptr, ScreenHandler.DGUSLCD_SD_FileSelected, nullptr),
   VPHELPER(VP_SD_FileSelectConfirm, nullptr, ScreenHandler.DGUSLCD_SD_StartPrint, nullptr),
+  // Dedicated M1125 heater-timeout Confirm VP. Handler set so the VP emulation
+  // path (populate_VPVar -> set_by_display_handler) is used.
+  VPHELPER(VP_M1125_TIMEOUT_CONFIRM, nullptr, ScreenHandler.HandleM1125TimeoutConfirm, nullptr),
   VPHELPER_STR(VP_SD_FileName0,  nullptr, VP_SD_FileName_LEN, nullptr, ScreenHandler.DGUSLCD_SD_SendFilename),
   VPHELPER_STR(VP_SD_FileName1,  nullptr, VP_SD_FileName_LEN, nullptr, ScreenHandler.DGUSLCD_SD_SendFilename),
   VPHELPER_STR(VP_SD_FileName2,  nullptr, VP_SD_FileName_LEN, nullptr, ScreenHandler.DGUSLCD_SD_SendFilename),
