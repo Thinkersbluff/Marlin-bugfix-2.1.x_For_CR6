@@ -184,7 +184,6 @@ namespace ExtUI {
   #endif
 
   // Generic notification stubs used by core
-  void onPrinterKilled(FSTR_P const error, FSTR_P const component);
 #if ENABLED(ADVANCED_PAUSE_FEATURE)
   void onPauseMode(PauseMessage m, PauseMode mm, uint8_t extruder);
 #endif

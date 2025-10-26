@@ -43,6 +43,16 @@ static void store_blocking_heating_cr6() {
 #endif
 }
 
+// Return the appropriate "print running" screen depending on whether
+// the current print is being streamed from a host (OctoPrint) or from
+// media (SD card). If printing from host, show the dedicated host
+// running screen so the UI reflects that state.
+static inline DGUSLCD_Screens choose_print_running_screen() {
+    return (ExtUI::isPrinting() && !ExtUI::isPrintingFromMedia())
+           ? DGUSLCD_SCREEN_PRINT_RUNNING_HOST
+           : DGUSLCD_SCREEN_PRINT_RUNNING;
+}
+
 void restore_blocking_heating_cr6() {
     if (!cr6_stored_blocking_wait) return;
         char buf[32];
@@ -296,7 +306,7 @@ void TuneMenuHandler(DGUS_VP_Variable &var, unsigned short buttonValue) {
         case VP_BUTTON_ADJUSTENTERKEY:
             switch (buttonValue) {
                 case 2:
-                    ScreenHandler.GotoScreen(ExtUI::isPrintingPaused() ? DGUSLCD_SCREEN_PRINT_PAUSED : DGUSLCD_SCREEN_PRINT_RUNNING, false);
+                    ScreenHandler.GotoScreen(ExtUI::isPrintingPaused() ? DGUSLCD_SCREEN_PRINT_PAUSED : choose_print_running_screen(), false);
                     break;
 
                 case 3:
@@ -352,7 +362,7 @@ void PrintPausedMenuHandler(DGUS_VP_Variable &var, unsigned short buttonValue) {
                 ExtUI::setPauseMenuResponse(PAUSE_RESPONSE_RESUME_PRINT);
             #endif
                 ExtUI::setUserConfirmed();
-                ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING);
+                ScreenHandler.GotoScreen(choose_print_running_screen());
             }
             else {
                 ScreenHandler.GotoScreen(DGUSLCD_SCREEN_DIALOG_RESUME);
@@ -395,7 +405,7 @@ void PrintPauseDialogHandler(DGUS_VP_Variable &var, unsigned short buttonValue) 
 
                 case 3:
                     // User chose to NOT pause: return to the Print Running screen
-                    ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING);
+                    ScreenHandler.GotoScreen(choose_print_running_screen());
                 break;
             }
             break;
@@ -433,7 +443,7 @@ void PrintResumeDialogHandler(DGUS_VP_Variable &var, unsigned short buttonValue)
                     else {
                         ExtUI::injectCommands_P(PSTR("M1125 R"));
                     }
-                    ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING);
+                    ScreenHandler.GotoScreen(choose_print_running_screen());
                     break;
 
                 case 3:
@@ -462,7 +472,7 @@ void FilamentRunoutHandler(DGUS_VP_Variable &var, unsigned short buttonValue) {
     switch (var.VP){
         case VP_BUTTON_RESUMEPRINTKEY:
             ExtUI::injectCommands_P(PSTR("M1125 R"));
-            ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING);
+            ScreenHandler.GotoScreen(choose_print_running_screen());
         break;
 
         case VP_BUTTON_STOPPRINTKEY:
@@ -502,7 +512,7 @@ void PrintStopDialogHandler(DGUS_VP_Variable &var, unsigned short buttonValue) {
                 break;
 
                 case 3:
-                    ScreenHandler.GotoScreen(ExtUI::isPrintingPaused() ? DGUSLCD_SCREEN_PRINT_PAUSED : DGUSLCD_SCREEN_PRINT_RUNNING);
+                    ScreenHandler.GotoScreen(ExtUI::isPrintingPaused() ? DGUSLCD_SCREEN_PRINT_PAUSED : choose_print_running_screen());
                 break;
             }
         break;
@@ -574,6 +584,7 @@ const struct PageHandler PageHandlers[] PROGMEM = {
     PAGE_HANDLER(DGUSLCD_Screens::DGUSLCD_SCREEN_DIALOG_STOP, PrintStopDialogHandler)
 
     PAGE_HANDLER(DGUSLCD_Screens::DGUSLCD_SCREEN_PRINT_RUNNING, PrintRunningMenuHandler)
+    PAGE_HANDLER(DGUSLCD_Screens::DGUSLCD_SCREEN_PRINT_RUNNING_HOST, PrintRunningMenuHandler)
     PAGE_HANDLER(DGUSLCD_Screens::DGUSLCD_SCREEN_PRINT_PAUSED, PrintPausedMenuHandler)
     PAGE_HANDLER(DGUSLCD_Screens::DGUSLCD_SCREEN_PRINT_FINISH, PrintFinishMenuHandler)
 

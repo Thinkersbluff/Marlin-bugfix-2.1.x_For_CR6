@@ -242,7 +242,7 @@ public:
 static void Buzzer(const uint16_t frequency, const uint16_t duration);
 
 // Provide a fallback implementation that forwards to the central Buzzer API if available
-#if HAS_BUZZER && !defined(DGUS_SCREENHANDLER_BUZZER_FORWARD)
+#if defined(HAS_BUZZER) && !defined(DGUS_SCREENHANDLER_BUZZER_FORWARD)
 #define DGUS_SCREENHANDLER_BUZZER_FORWARD
 #endif
 

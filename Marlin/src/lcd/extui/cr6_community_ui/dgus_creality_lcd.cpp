@@ -57,14 +57,16 @@ namespace ExtUI {
 
   void onIdle() { ScreenHandler.loop(); }
 
-  void onPrinterKilled(PGM_P const error, PGM_P const component) {
-    ScreenHandler.sendinfoscreen(GET_TEXT(MSG_HALTED), error, GET_TEXT(MSG_PLEASE_RESET), GET_TEXT(MSG_PLEASE_RESET), true, true, true, true);
+  void onPrinterKilled(FSTR_P const error, FSTR_P const component) {
+    // sendinfoscreen expects PGM pointers when the corresponding "inflash" flag is true.
+    ScreenHandler.sendinfoscreen(FTOP(GET_TEXT(MSG_HALTED)), FTOP(error), FTOP(GET_TEXT(MSG_PLEASE_RESET)), FTOP(GET_TEXT(MSG_PLEASE_RESET)), true, true, true, true);
 
-    if (strcmp_P(error, GET_TEXT(MSG_ERR_MAXTEMP)) == 0 || strcmp_P(error, GET_TEXT(MSG_THERMAL_RUNAWAY)) == 0)     {
+    // Compare flash strings by converting FSTR_P -> PGM_P via FTOP()
+    if (strcmp_P(FTOP(error), FTOP(GET_TEXT(MSG_ERR_MAXTEMP))) == 0 || strcmp_P(FTOP(error), FTOP(GET_TEXT(MSG_THERMAL_RUNAWAY))) == 0) {
       ScreenHandler.GotoScreen(DGUSLCD_SCREEN_THERMAL_RUNAWAY);
-    } else if (strcmp_P(error, GET_TEXT(MSG_HEATING_FAILED_LCD)) == 0) {
+    } else if (strcmp_P(FTOP(error), FTOP(GET_TEXT(MSG_HEATING_FAILED_LCD))) == 0) {
       ScreenHandler.GotoScreen(DGUSLCD_SCREEN_HEATING_FAILED);
-    }else if (strcmp_P(error, GET_TEXT(MSG_ERR_MINTEMP)) == 0) {
+    } else if (strcmp_P(FTOP(error), FTOP(GET_TEXT(MSG_ERR_MINTEMP))) == 0) {
       ScreenHandler.GotoScreen(DGUSLCD_SCREEN_THERMISTOR_ERROR);
     } else {
       ScreenHandler.GotoScreen(DGUSLCD_SCREEN_KILL);
@@ -72,7 +74,32 @@ namespace ExtUI {
 
     ScreenHandler.KillScreenCalled();
     while (!ScreenHandler.loop());  // Wait while anything is left to be sent
-}
+  }
+
+  // RAM-string overload: accept runtime `const char*` strings (from RAM)
+  // and behave the same as the flash-string variant. This makes the
+  // ExtUI API tolerant of callers that pass RAM strings instead of
+  // FSTR_P (FlashStringHelper) values.
+  void onPrinterKilled(const char* error, const char* component) {
+    // Send the info screen: first line is flash, second is RAM; tell the
+    // sendinfoscreen helper which lines are in flash via the boolean flags.
+    ScreenHandler.sendinfoscreen(FTOP(GET_TEXT(MSG_HALTED)), error, FTOP(GET_TEXT(MSG_PLEASE_RESET)), FTOP(GET_TEXT(MSG_PLEASE_RESET)), true, false, true, true);
+
+    // Compare incoming RAM `error` against flash messages using strcmp_P
+    // (RAM first, PROGMEM second).
+    if (strcmp_P(error, FTOP(GET_TEXT(MSG_ERR_MAXTEMP))) == 0 || strcmp_P(error, FTOP(GET_TEXT(MSG_THERMAL_RUNAWAY))) == 0) {
+      ScreenHandler.GotoScreen(DGUSLCD_SCREEN_THERMAL_RUNAWAY);
+    } else if (strcmp_P(error, FTOP(GET_TEXT(MSG_HEATING_FAILED_LCD))) == 0) {
+      ScreenHandler.GotoScreen(DGUSLCD_SCREEN_HEATING_FAILED);
+    } else if (strcmp_P(error, FTOP(GET_TEXT(MSG_ERR_MINTEMP))) == 0) {
+      ScreenHandler.GotoScreen(DGUSLCD_SCREEN_THERMISTOR_ERROR);
+    } else {
+      ScreenHandler.GotoScreen(DGUSLCD_SCREEN_KILL);
+    }
+
+    ScreenHandler.KillScreenCalled();
+    while (!ScreenHandler.loop());  // Wait while anything is left to be sent
+  }
 
   void onMediaInserted() { TERN_(SDSUPPORT, ScreenHandler.SDCardInserted()); }
   void onMediaError()    { TERN_(SDSUPPORT, ScreenHandler.SDCardError()); }
@@ -101,7 +128,14 @@ bool hasPrintTimer = false;
 #endif
 
     ScreenHandler.SetViewMeshLevelState();
-    ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING);
+    // If this print appears to be streamed from a host (no SD file open
+    // and no power-loss recovery), show the dedicated host-running screen
+    // so the UI reflects that the job is coming from OctoPrint/host.
+    if (!IS_SD_FILE_OPEN() && !(PrintJobRecovery::valid() && PrintJobRecovery::exists())) {
+      ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING_HOST);
+    } else {
+      ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING);
+    }
   }
 
   void onPrintTimerPaused() {

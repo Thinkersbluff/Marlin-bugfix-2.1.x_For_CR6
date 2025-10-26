@@ -608,7 +608,10 @@ void GcodeSuite::process_parsed_command(bool no_ok/*=false*/) {
       #if ENABLED(DGUS_LCD_UI_CR6_COMM) && DISABLED(ADVANCED_PAUSE_FEATURE)
         // Custom CR6 community UI Pause/Resume (P=park, R=resume)
         // Handler implemented in Marlin/src/gcode/custom/M1125.cpp
-        case 1125: M1125(); break;
+        // Accept both 1125 and 1135 so hosts/clients that can't easily
+        // send the original code can use the alias 1135 without a
+        // breaking change. Both dispatch to the same handler.
+        case 1125: case 1135: M1125(); break;
       #endif
       #if ENABLED(HOST_KEEPALIVE_FEATURE)
         case 113: M113(); break;                                  // M113: Set Host Keepalive interval

@@ -513,6 +513,10 @@ namespace ExtUI {
   void onPlayTone(const uint16_t frequency, const uint16_t duration=0);
 
   void onPrinterKilled(FSTR_P const error, FSTR_P const component);
+  // Convenience overload to accept RAM (const char*) strings and forward
+  // to the flash-string variant where possible. Useful when callers have
+  // runtime-created error strings.
+  void onPrinterKilled(const char* error, const char* component);
   void onSurviveInKilled();
 
   void onPrintTimerStarted();

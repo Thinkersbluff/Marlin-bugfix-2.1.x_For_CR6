@@ -283,28 +283,12 @@ void DGUSScreenHandler::KillScreenCalled() {
 }
 
 
-// Buzzer implementation: forward to central buzzer API when available, otherwise stub
-#if defined(DGUS_SCREENHANDLER_BUZZER_FORWARD) || HAS_BUZZER
-void DGUSScreenHandler::Buzzer(const uint16_t frequency, const uint16_t duration) {
-  UNUSED(frequency);
-  // If buzzer exists forward, otherwise try buzzer.tone fallback
-  #if defined(buzzer)
-    buzzer.tone(duration, 0);
-  #else
-    // noop if no buzzer API available
-    (void)duration;
-  #endif
-}
-#else
-void DGUSScreenHandler::Buzzer(const uint16_t frequency, const uint16_t duration) { UNUSED(frequency); UNUSED(duration); }
-
 // Lightweight adapter used by other modules that don't want to include
 // the full DGUSScreenHandler header. Forwards to the class method.
 #if ENABLED(DGUS_LCD_UI_CR6_COMM)
 void DGUS_Buzzer(const uint16_t duration, const uint16_t frequency) {
   DGUSScreenHandler::Buzzer(frequency, duration);
 }
-#endif
 #endif
 
 void DGUSScreenHandler::OnPowerlossResume() {
@@ -816,7 +800,7 @@ void DGUSScreenHandler::OnFactoryReset() {
   ScreenHandler.GotoScreen(DGUSLCD_SCREEN_MAIN);
 }
 
-#if HAS_BUZZER
+// DGUS-specific buzzer implementation — always used for this UI.
 void DGUSScreenHandler::Buzzer(const uint16_t frequency, const uint16_t duration) {
   // Frequency is fixed - duration is not but in 8 ms steps
   const uint8_t durationUnits = static_cast<uint8_t>(duration / 8);
@@ -827,7 +811,6 @@ void DGUSScreenHandler::Buzzer(const uint16_t frequency, const uint16_t duration
   // WAE_Music_Play_Set
   dgusdisplay.WriteVariable(0xA0, buzzerCommand, sizeof(buzzerCommand));
 }
-#endif
 
 bool DGUSScreenHandler::HandlePendingUserConfirmation() {
   if (!ExtUI::isWaitingOnUser()) {
@@ -835,7 +818,9 @@ bool DGUSScreenHandler::HandlePendingUserConfirmation() {
   }
 
   // Switch to the resume screen
-  ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING, false);
+  // Show host-specific running screen when appropriate
+  if (!ExtUI::isPrintingFromMedia()) ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING_HOST, false);
+  else ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING, false);
 
   // We might be re-entrant here
   ExtUI::setUserConfirmed();
@@ -1868,8 +1853,11 @@ void DGUSScreenHandler::PopToOldScreen() {
     memmove(&past_screens[0], &past_screens[1], sizeof(past_screens) - 1);
     past_screens[sizeof(past_screens) - 1] = DGUSLCD_SCREEN_MAIN;
   } else {
-    if(ExtUI::isPrinting()) {
-      GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING, false);
+    if (ExtUI::isPrinting()) {
+      // If printing from host (not from media), show the dedicated host
+      // running screen so the UI clearly indicates a host-streamed job.
+      if (!ExtUI::isPrintingFromMedia()) GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING_HOST, false);
+      else GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING, false);
     } else {
       GotoScreen(DGUSLCD_SCREEN_MAIN, false);
     }

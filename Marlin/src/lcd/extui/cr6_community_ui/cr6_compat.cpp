@@ -35,7 +35,7 @@ namespace ExtUI {
   void onLevelingDone() { /* no-op */ }
   #endif
 
-  
+
 
   void onSetMinExtrusionTemp(const celsius_t t) { (void)t; }
 
@@ -46,15 +46,6 @@ namespace ExtUI {
 #if HAS_PID_HEATING
   void onPIDTuning(const pidresult_t rst) { (void)rst; }
   void onStartM303(const int count, const heater_id_t hid, const celsius_t temp) { (void)count; (void)hid; (void)temp; }
-#endif
-
-  void onPrinterKilled(FSTR_P const error, FSTR_P const component) { (void)error; (void)component; }
-#if ENABLED(ADVANCED_PAUSE_FEATURE)
-  void onPauseMode(PauseMessage m, PauseMode mm, uint8_t extruder) { stdOnPauseMode(m, mm, extruder); }
-#else
-  // ADVANCED_PAUSE_FEATURE disabled: provide a no-op stub so callers can still
-  // call ExtUI::onPauseMode() without needing the pause enums/types.
-  void onPauseMode(int /*m*/, int /*mm*/, uint8_t /*extruder*/) { /* no-op */ }
 #endif
 
 #if !ENABLED(ADVANCED_PAUSE_FEATURE)

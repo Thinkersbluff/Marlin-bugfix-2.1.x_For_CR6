@@ -39,6 +39,13 @@ enum DGUSLCD_Screens : uint8_t {
   DGUSLCD_SCREEN_PRINT_RUNNING = 37,   // DWINTouchPage::PRINT_PROGRESS_RUNNING
   DGUSLCD_SCREEN_PRINT_PAUSED = 39,    // DWINTouchPage::PRINT_PROGRESS_PAUSED
 
+  // A dedicated screen to indicate a job that is being streamed from a
+  // host (OctoPrint/Pronterface) rather than running from media (SD card).
+  // This allows the DGUS UI to present a distinct layout/controls while a
+  // host-controlled print is active. Mapped to the same VP list as the
+  // normal print screen so status data updates identically.
+  DGUSLCD_SCREEN_PRINT_RUNNING_HOST = 82,
+
   DGUSLCD_SCREEN_DIALOG_PAUSE = 38,    // DWINTouchPage::DIALOG_PAUSE_PRINTING
   DGUSLCD_SCREEN_DIALOG_RESUME = 65,   // DWINTouchPage::DIALOG_RESUME_PRINTING
   DGUSLCD_SCREEN_DIALOG_STOP = 40,     // DWINTouchPage::DIALOG_STOP_PRINTING

@@ -442,6 +442,7 @@ const struct VPMapping VPMap[] PROGMEM = {
 
   { DGUSLCD_SCREEN_PRINT_FINISH, VPList_PrintScreen },
   { DGUSLCD_SCREEN_PRINT_RUNNING, VPList_PrintScreen },
+  { DGUSLCD_SCREEN_PRINT_RUNNING_HOST, VPList_PrintScreen },
   { DGUSLCD_SCREEN_PRINT_PAUSED, VPList_PrintScreen },
 
   { DGUSLCD_SCREEN_TUNING, VPList_TuneScreen },
