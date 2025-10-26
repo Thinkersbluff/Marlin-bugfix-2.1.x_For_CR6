@@ -792,6 +792,16 @@ void DGUSScreenHandler::DGUSLCD_SendHeaterStatusToDisplay(DGUS_VP_Variable &var)
 void DGUSScreenHandler::FilamentRunout() {
   ScreenHandler.sendinfoscreen(PSTR("Load new"), PSTR("filament."), PSTR(" "), PSTR("Filament Runout"), true, true, true, true);
   ScreenHandler.GotoScreen(DGUSLCD_SCREEN_POPUP);
+
+  // Audible alert: play a short series of beeps so user notices the runout.
+  // Use the existing Buzzer() helper and safe_delay() to space beeps.
+  // This is a short blocking sequence (~1.8s for the settings below).
+  for (uint8_t i = 0; i < 10; ++i) {
+    // frequency parameter is currently unused by the implementation,
+    // but keep a typical value for readability.
+    Buzzer(1000, 80); // ~80 ms beep (display divides duration by 8 internally)
+    safe_delay(100);  // 100 ms pause between beeps
+  }
 }
 
 void DGUSScreenHandler::OnFactoryReset() {
