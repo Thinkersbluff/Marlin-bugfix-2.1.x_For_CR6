@@ -437,9 +437,6 @@ const struct VPMapping VPMap[] PROGMEM = {
 
   { DGUSLCD_SCREEN_SDFILELIST, VPList_SDFileList },
 
-  { DGUSLCD_SCREEN_FILAMENTRUNOUT1, VPList_PrintPausingError },
-  { DGUSLCD_SCREEN_FILAMENTRUNOUT2, VPList_PrintPausingError },
-
   { DGUSLCD_SCREEN_PRINT_FINISH, VPList_PrintScreen },
   { DGUSLCD_SCREEN_PRINT_RUNNING, VPList_PrintScreen },
   { DGUSLCD_SCREEN_PRINT_RUNNING_HOST, VPList_PrintScreen },

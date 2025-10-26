@@ -790,7 +790,8 @@ void DGUSScreenHandler::DGUSLCD_SendHeaterStatusToDisplay(DGUS_VP_Variable &var)
 #endif // SDSUPPORT
 
 void DGUSScreenHandler::FilamentRunout() {
-  ScreenHandler.GotoScreen(DGUSLCD_SCREEN_FILAMENTRUNOUT1);
+  ScreenHandler.sendinfoscreen(PSTR("Load new"), PSTR("filament."), PSTR(" "), PSTR("Filament Runout"), true, true, true, true);
+  ScreenHandler.GotoScreen(DGUSLCD_SCREEN_POPUP);
 }
 
 void DGUSScreenHandler::OnFactoryReset() {
