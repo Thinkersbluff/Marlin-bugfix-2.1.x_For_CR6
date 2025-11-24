@@ -18,3 +18,8 @@ bool M1125_IsAutoJobTimerSuppressed();
 // for debug instrumentation. Define DEBUG_M1125_PAUSE_MOVE_LOGGING to enable
 // runtime logging of blocking moves that occur while this pause is active.
 bool M1125_IsPauseActive();
+
+// Abort/clear any M1125 pause state (used when a print is cancelled/aborted)
+// Clears timers, pending resume state and suppression flags so leftover
+// M1125 timeout UI does not appear after a job cancel.
+void M1125_AbortPause();

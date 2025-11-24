@@ -23,6 +23,10 @@
 #include "../gcode.h"
 #include "../../core/serial.h"
 
+#if ENABLED(DGUS_LCD_UI_CR6_COMM)
+#include "../../lcd/extui/cr6_community_ui/DGUSScreenHandler.h"
+#endif
+
 /**
  * M118: Display a message in the host console.
  *
@@ -57,4 +61,20 @@ void GcodeSuite::M118() {
   if (hasE) SERIAL_ECHO_START();
   if (hasA) SERIAL_ECHOPGM("//");
   SERIAL_ECHOLN(p);
+
+#if ENABLED(DGUS_LCD_UI_CR6_COMM)
+  // Accept either "Host is:" (preferred shorter prefix) or the older
+  // "Octoprint is:" prefix produced by TerminalResponse rules and map the
+  // trailing state text into the DGUS filename VP. Ignore other M118 payloads.
+  if (!strncasecmp(p, "Host is:", sizeof("Host is:") - 1)) {
+    const char *s = p + (sizeof("Host is:") - 1);
+    while (*s == ' ') ++s;
+    DGUSScreenHandler::SetHostMonitoringState(s);
+  }
+  else if (!strncasecmp(p, "Octoprint is:", sizeof("Octoprint is:") - 1)) {
+    const char *s = p + (sizeof("Octoprint is:") - 1);
+    while (*s == ' ') ++s;
+    DGUSScreenHandler::SetHostMonitoringState(s);
+  }
+#endif
 }

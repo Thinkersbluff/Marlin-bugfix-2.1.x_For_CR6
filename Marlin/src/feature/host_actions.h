@@ -44,6 +44,8 @@ class HostUI {
 
   static void action(FSTR_P const fstr, const bool eol=true);
 
+  static bool should_suppress_m117(const char * const message);
+
   #ifdef ACTION_ON_KILL
     static void kill();
   #endif

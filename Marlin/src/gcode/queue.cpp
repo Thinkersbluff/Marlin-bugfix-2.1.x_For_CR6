@@ -29,6 +29,8 @@ GCodeQueue queue;
 
 #include "gcode.h"
 
+#include "custom/M1125.h"
+
 #include "../lcd/marlinui.h"
 #include "../sd/cardreader.h"
 #include "../module/motion.h"
@@ -551,6 +553,13 @@ void GCodeQueue::get_serial_commands() {
         #if NO_TIMEOUTS > 0
           last_command_time = ms;
         #endif
+
+        // NOTE: Previously Marlin defensively rejected host motion commands
+        // while M1125 owned the paused state. That behavior could cause
+        // host-resume sequences to stall (host streams motion and firmware
+        // drops it). To allow hosts to resume reliably, accept and enqueue
+        // motion commands normally even while paused; the M1125 finalizer
+        // remains responsible for restoring positions as appropriate.
 
         // Add the command to the queue
         ring_buffer.enqueue(serial.line_buffer, false OPTARG(HAS_MULTI_SERIAL, p));

@@ -126,6 +126,7 @@ const uint16_t VPList_Control[] PROGMEM = {
 
   VP_LED_TOGGLE,
   VP_MUTE_ICON,
+  VP_LEVELING_FADE_HEIGHT,
 
   0x0000
 };
@@ -234,6 +235,7 @@ const uint16_t VPList_Basic[] PROGMEM = {
 
 const uint16_t VPList_ZOffsetLevel[] PROGMEM = {
   VPList_CommonWithStatus,
+  VP_LEVELING_FADE_HEIGHT,
 
   0x0000
 };
@@ -322,22 +324,9 @@ const uint16_t VPList_FWRetractTune[] PROGMEM = {
 };
 #endif
 
-const uint16_t VPList_LevelingSettings[] PROGMEM = {
-  VPList_CommonWithStatus,
-  // Probe preheat / post-probe stabilization UI controls were removed because
-  // Marlin no longer exposes probe.settings. Disable these VPs to avoid
-  // referencing the removed structure. If desired, re-enable after adding
-  // a proper API bridge.
-#if 0
-  VP_TOGGLE_PROBING_HEATERS_OFF_ONOFF_ICON,
-  VP_TOGGLE_PROBE_PREHEAT_HOTEND_TEMP,
-  VP_TOGGLE_PROBE_PREHEAT_BED_TEMP,
-  VP_TOGGLE_POST_PROBING_TEMPERATURE_STABILIZATION_ICON,
-#endif
-  VP_LEVELING_FADE_HEIGHT,
-
-  0x0000
-};
+/* DGUSLCD_SCREEN_LEVELING_SETTINGS removed: VPList_LevelingSettings deleted.
+   Probe preheat / post-probe stabilization UI controls were intentionally
+   removed because Marlin no longer exposes probe.settings. */
 
 const uint16_t VPList_AxisSettingsNav[] PROGMEM = {
   VPList_CommonWithStatus,
@@ -440,6 +429,7 @@ const struct VPMapping VPMap[] PROGMEM = {
   { DGUSLCD_SCREEN_PRINT_FINISH, VPList_PrintScreen },
   { DGUSLCD_SCREEN_PRINT_RUNNING, VPList_PrintScreen },
   { DGUSLCD_SCREEN_PRINT_RUNNING_HOST, VPList_PrintScreen },
+  { DGUSLCD_SCREEN_PRINT_PAUSED_HOST, VPList_PrintScreen },
   { DGUSLCD_SCREEN_PRINT_PAUSED, VPList_PrintScreen },
 
   { DGUSLCD_SCREEN_TUNING, VPList_TuneScreen },
@@ -482,7 +472,6 @@ const struct VPMapping VPMap[] PROGMEM = {
   { DGUSLCD_SCREEN_TUNEFWRETRACT, VPList_FWRetractTune },
 
   { DGUSLCD_SCREEN_ESTEPS_CALIBRATION_RESULTS, VPList_EstepsCalibration },
-  { DGUSLCD_SCREEN_LEVELING_SETTINGS, VPList_LevelingSettings },
 
   { DGUSLCD_SCREEN_AXIS_SETTINGS_NAV, VPList_AxisSettingsNav },
   { DGUSLCD_SCREEN_AXIS_SETTINGS_AXIS , VPList_AxisSettingsAxis },
@@ -669,8 +658,8 @@ const struct DGUS_VP_Variable ListOfVP[] PROGMEM = {
 #if HAS_BED_PROBE
   // Probe-related buttons and VPs (preheat/stabilization) are intentionally
   // disabled because Marlin no longer exposes probe.settings and some
-  // handlers/definitions are conditionally compiled. Keep the button handler
-  // disabled to avoid referencing absent symbols.
+  // handlers/definitions are conditionally compiled. The navigation to the
+  // former Leveling Settings screen has been removed.
 #if 0
   VPHELPER(VP_TOGGLE_PROBING_HEATERS_OFF_ONOFF_BUTTON, nullptr, ScreenHandler.HandleToggleProbeHeaters, nullptr),
 
@@ -682,7 +671,7 @@ const struct DGUS_VP_Variable ListOfVP[] PROGMEM = {
   VPHELPER(VP_TOGGLE_PROBE_PREHEAT_HOTEND_TEMP, &probe.settings.preheat_hotend_temp, ScreenHandler.HandleToggleProbePreheatTemp, ScreenHandler.DGUSLCD_SendWordValueToDisplay),
   VPHELPER(VP_TOGGLE_PROBE_PREHEAT_BED_TEMP, &probe.settings.preheat_bed_temp, ScreenHandler.HandleToggleProbePreheatTemp, ScreenHandler.DGUSLCD_SendWordValueToDisplay),
 
-  VPHELPER(VP_TOGGLE_PROBE_SETTINGS_NAV_BUTTON, nullptr, (ScreenHandler.DGUSLCD_NavigateToPage<DGUSLCD_SCREEN_LEVELING_SETTINGS>), nullptr),
+  // Navigation to DGUSLCD_SCREEN_LEVELING_SETTINGS removed.
 #endif
 #endif
 #ifdef HAS_MESH
@@ -710,6 +699,9 @@ const struct DGUS_VP_Variable ListOfVP[] PROGMEM = {
   VPHELPER(VP_SD_ScrollEvent, nullptr, ScreenHandler.DGUSLCD_SD_ScrollFilelist, nullptr),
   VPHELPER(VP_SD_FileSelected, nullptr, ScreenHandler.DGUSLCD_SD_FileSelected, nullptr),
   VPHELPER(VP_SD_FileSelectConfirm, nullptr, ScreenHandler.DGUSLCD_SD_StartPrint, nullptr),
+  // Abort-confirm virtual VP: when the SD card is removed during a pause/resume
+  // flow we present this confirm so the user can acknowledge the abort.
+  VPHELPER(VP_SD_AbortPrintConfirmed, nullptr, ScreenHandler.sdReallyAbort, nullptr),
   // Dedicated M1125 heater-timeout Confirm VP. Handler set so the VP emulation
   // path (populate_VPVar -> set_by_display_handler) is used.
   VPHELPER(VP_M1125_TIMEOUT_CONFIRM, nullptr, ScreenHandler.HandleM1125TimeoutConfirm, nullptr),

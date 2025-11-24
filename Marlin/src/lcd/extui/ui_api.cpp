@@ -1033,7 +1033,10 @@ namespace ExtUI {
   bool awaitingUserConfirm() {
     return TERN0(HAS_RESUME_CONTINUE, wait_for_user) || TERN0(HOST_KEEPALIVE_FEATURE, getHostKeepaliveIsPaused());
   }
-  void setUserConfirmed() { TERN_(HAS_RESUME_CONTINUE, wait_for_user = false); }
+  // Clear any wait-for-user flag. Historically this was conditional on
+  // HAS_RESUME_CONTINUE; for reliable resume flows we must always clear
+  // the global `wait_for_user` when the UI indicates the user confirmed.
+  void setUserConfirmed() { wait_for_user = false; }
 
   #if ENABLED(ADVANCED_PAUSE_FEATURE)
     void setPauseMenuResponse(PauseMenuResponse response) { pause_menu_response = response; }

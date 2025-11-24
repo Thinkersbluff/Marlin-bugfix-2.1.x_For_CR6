@@ -72,7 +72,8 @@ typedef struct {
        mounted:1,               // The card or flash drive is mounted and ready to read/write
        filenameIsDir:1,         // The working item is a directory
        workDirIsRoot:1,         // The working directory is / so there's no parent
-       abort_sd_printing:1      // Abort by calling abortSDPrinting() at the main loop()
+       abort_sd_printing:1,     // Abort by calling abortSDPrinting() at the main loop()
+       pending_print_start:1    // A print start was requested (M23/M24 queued) but not yet started
        #if MEDIA_SUPPORT_BIN_FILES
          , filenameIsBin:1      // The working item is a BIN file
        #endif

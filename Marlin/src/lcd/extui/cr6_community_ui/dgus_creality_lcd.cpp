@@ -35,6 +35,7 @@
 #include "DGUSDisplay.h"
 #include "DGUSDisplayDef.h"
 #include "DGUSScreenHandler.h"
+#include "../../../feature/print_source.h"
 #include "./creality_touch/PIDHandler.h"
 #include "./creality_touch/MeshValidationHandler.h"
 // Centralized pause-mode handler for CR6 UI.
@@ -118,23 +119,29 @@ bool hasPrintTimer = false;
 
   void onPrintTimerStarted() {
     hasPrintTimer = true;
-
-    if (!IS_SD_FILE_OPEN() && !(PrintJobRecovery::valid() && PrintJobRecovery::exists())) {
-      ScreenHandler.SetPrintingFromHost();
-    }
-
 #if ENABLED(LCD_SET_PROGRESS_MANUALLY)
     ui.progress_reset();
 #endif
 
     ScreenHandler.SetViewMeshLevelState();
-    // If this print appears to be streamed from a host (no SD file open
-    // and no power-loss recovery), show the dedicated host-running screen
-    // so the UI reflects that the job is coming from OctoPrint/host.
-    if (!IS_SD_FILE_OPEN() && !(PrintJobRecovery::valid() && PrintJobRecovery::exists())) {
+    // Decide which running screen to show. Prefer the canonical PrintSource
+    // established at the start of the print. Do NOT mutate or set the
+    // canonical PrintSource here - it must remain the single source of truth
+    // until the print finishes or is aborted.
+    if (PrintSource::printingFromHost()) {
       ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING_HOST);
-    } else {
+    }
+    else if (PrintSource::printingFromSDCard()) {
       ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING);
+    }
+    else {
+      // PrintSource is not set yet. Fall back to the file-open heuristic
+      // for display only (do not change PrintSource). This covers legacy
+      // or unexpected start paths but keeps the canonical source stable.
+      if (!IS_SD_FILE_OPEN() && !(PrintJobRecovery::valid() && PrintJobRecovery::exists()))
+        ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING_HOST);
+      else
+        ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING);
     }
   }
 
@@ -147,7 +154,8 @@ bool hasPrintTimer = false;
     if ((ExtUI::isPrintingFromMediaPaused() || print_job_timer.isPaused()) && !ExtUI::isWaitingOnUser()) {
       // Don't override an active Confirm dialog
       if (!(ScreenHandler.getCurrentScreen() == DGUSLCD_SCREEN_CONFIRM && ScreenHandler.IsConfirmActive())) {
-        ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_PAUSED);
+        // Show host-specific paused screen when PrintSource indicates HOST.
+        ScreenHandler.GotoScreen(PrintSource::printingFromHost() ? DGUSLCD_SCREEN_PRINT_PAUSED_HOST : DGUSLCD_SCREEN_PRINT_PAUSED);
       }
     }
   }

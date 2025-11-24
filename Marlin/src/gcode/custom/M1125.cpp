@@ -47,6 +47,7 @@
 #define M1125_USE_LOCAL_HEATER_IDLE 1
 #endif
 
+
 // File-scope state for M1125 pause/resume and heater-timeout handling
 static xyze_pos_t m1125_saved_position;
 static bool m1125_have_saved_position = false;
@@ -75,12 +76,37 @@ void M1125_ClearAutoJobTimerSuppress() { m1125_suppress_auto_job_timer = false; 
 bool M1125_IsAutoJobTimerSuppressed() { return m1125_suppress_auto_job_timer; }
 // Forward declare the resume poll helper so it can be used in the timeout checker.
 static bool m1125_poll_resume();
+// Forward declare the public timeout/check helper so the resume handler
+// can invoke it immediately when processing a resume request.
+bool M1125_CheckAndHandleHeaterTimeout();
 
 // Storage for any commands that were committed into the G-code ring buffer
 // from the SD card prior to a pause. We preserve them across the pause and
 // restore them on resume so no commands are lost.
 static GCodeQueue::CommandLine m1125_saved_commands[BUFSIZE];
 static uint8_t m1125_saved_cmd_count = 0;
+
+static inline char m1125_upper(const char c) {
+  return (c >= 'a' && c <= 'z') ? (c - 'a' + 'A') : c;
+}
+
+static bool m1125_command_matches(const char *cmd, const char *target) {
+  if (!cmd || !*cmd) return false;
+  while (*cmd == ' ') ++cmd;
+  const char *t = target;
+  while (*t) {
+    if (!*cmd || m1125_upper(*cmd) != *t) return false;
+    ++cmd;
+    ++t;
+  }
+  const char tail = *cmd;
+  return tail == '\0' || tail == ' ' || tail == '\t' || tail == ';';
+}
+
+static bool m1125_should_skip_saved_command(const char *cmd) {
+  if (!cmd || !*cmd) return true;
+  return m1125_command_matches(cmd, "M600") || m1125_command_matches(cmd, "M1125");
+}
 // Forward declarations for Continue action helpers (defined later)
 void M1125_TimeoutContinueAction();
 void M1125_TimeoutContinueRecovery();
@@ -148,6 +174,8 @@ struct LocalIdleTimer {
   #include "../../feature/host_actions.h"
 #endif
 
+#include "../../feature/print_source.h"
+
 // Define as a GcodeSuite method like other gcode handlers
 void GcodeSuite::M1125() {
   // Parameter P = pause, R = resume
@@ -159,6 +187,21 @@ void GcodeSuite::M1125() {
   if (hasP && !hasR) {
     // --- PAUSE / PARK ---
     const bool sd_printing = card.isFileOpen() && card.isStillPrinting();
+
+    // If M1125 already owns the paused state, ignore duplicate pauses.
+    if (m1125_pause_active) {
+      SERIAL_ECHOLNPGM("[DEBUG] M1125: pause requested but pause already active - ignoring");
+      return;
+    }
+
+    // Canonical print-source: mark where this print came from so UI can
+    // choose the correct Host-vs-SD paused screen.
+    if (sd_printing) {
+      PrintSource::set_printing_from_sd();
+    }
+    else {
+      PrintSource::set_printing_from_host();
+    }
 
   // Suppress DGUS popup-to-pause-response mapping while M1125 owns pause state
   // This prevents DGUS handlers from calling ExtUI::setPauseMenuResponse()
@@ -204,20 +247,52 @@ void GcodeSuite::M1125() {
       {
         const uint8_t start = queue.ring_buffer.index_r;
         const uint8_t len = queue.ring_buffer.length;
-        m1125_saved_cmd_count = len;
+        m1125_saved_cmd_count = 0;
+        uint8_t filtered_cmds = 0;
         for (uint8_t i = 0; i < len; ++i) {
           uint8_t pos = start + i;
           if (pos >= BUFSIZE) pos -= BUFSIZE;
-          m1125_saved_commands[i] = queue.ring_buffer.commands[pos];
+          const GCodeQueue::CommandLine &src = queue.ring_buffer.commands[pos];
+          if (m1125_should_skip_saved_command(src.buffer)) {
+            if (!filtered_cmds) PORT_REDIRECT(SerialMask::All);
+            ++filtered_cmds;
+            SERIAL_ECHOPGM("[DEBUG] M1125: filtering saved SD cmd -> ");
+            SERIAL_ECHOLN(src.buffer);
+            continue;
+          }
+          if (m1125_saved_cmd_count < BUFSIZE)
+            m1125_saved_commands[m1125_saved_cmd_count++] = src;
         }
+
         queue.ring_buffer.clear();
       }
       // Restore the file position so resume will restart from the same place
       card.setIndex(saved_sd_index);
-      SERIAL_ECHOLNPAIR("[DEBUG] M1125: preserved ", m1125_saved_cmd_count);
-      SERIAL_ECHOLNPGM(" queued SD commands for resume");
+      if (m1125_saved_cmd_count) {
+        PORT_REDIRECT(SerialMask::All);
+        SERIAL_ECHOLNPAIR("[DEBUG] M1125: preserved ", m1125_saved_cmd_count);
+        SERIAL_ECHOLNPGM(" queued SD commands for resume");
+        SERIAL_ECHOLNPAIR("[DEBUG] M1125: saved ", m1125_saved_cmd_count, " SD command(s) for resume:");
+        for (uint8_t i = 0; i < m1125_saved_cmd_count; ++i) {
+          SERIAL_ECHOPGM("  [");
+          SERIAL_ECHO(i);
+          SERIAL_ECHOPGM("] ");
+          SERIAL_ECHOLN(m1125_saved_commands[i].buffer);
+        }
+      }
+      else {
+        SERIAL_ECHOLNPGM("[DEBUG] M1125: no SD commands preserved (all filtered)");
+      }
     }
     print_job_timer.pause();
+    // Force the DGUS CR6 UI to show the paused screen immediately so the
+    // display does not remain on the host-running view while we perform
+    // the park and beep sequence. The stopwatch.pause() call triggers the
+    // ExtUI callback in most UIs, but in some timing scenarios the display
+    // update can lag behind; force the screen change for deterministic UX.
+    #if ENABLED(DGUS_LCD_UI_CR6_COMM)
+      DGUSScreenHandler::GotoScreen(PrintSource::printingFromHost() ? DGUSLCD_SCREEN_PRINT_PAUSED_HOST : DGUSLCD_SCREEN_PRINT_PAUSED);
+    #endif
     // Save current position into a private M1125 slot to avoid clashes
     // with global SAVED_POSITIONS (G60/G61) usage by other code.
     m1125_saved_position = current_position;
@@ -235,20 +310,56 @@ void GcodeSuite::M1125() {
     // Notify UI: Parking
     ui.set_status_P(PSTR("Parking Nozzle..."));
 
-#if ENABLED(NOZZLE_PARK_FEATURE)
-    // Park the nozzle using Nozzle::park (z_action 0 = use park defaults)
-    Nozzle::park(0, NOZZLE_PARK_POINT);
-#else
-    // If nozzle park not available, do a conservative coordinate move: raise Z
+  #if HAS_EXTRUDERS
+    // Perform the retract + slight Z lift and XY wipe move synchronously
+    // so the moves complete before we continue to the park. This mirrors
+    // the injected sequence (G91; G1 E-2 Z0.2 F2400; G1 X5 Y5 F3000; G90)
+    // but uses blocking firmware moves to guarantee ordering. The saved
+    // `m1125_saved_position` was captured earlier and is intentionally
+    // left unchanged so resume will restore the original print position
+    // (and restore E for SD prints) as before.
     planner.synchronize();
-    const float zraise = NOZZLE_PARK_Z_RAISE_MIN;
-    do_blocking_move_to(current_position[X_AXIS], current_position[Y_AXIS], current_position[Z_AXIS] + zraise, current_position[E_AXIS]);
-#endif
+    // Compute feedrates (do_blocking_move_to expects mm/s)
+    const feedRate_t retract_feed_mm_s = MMM_TO_MMS(2400.0f);
+    const feedRate_t wipe_feed_mm_s    = MMM_TO_MMS(3000.0f);
+
+    // Capture current coordinates (saved position remains unchanged)
+    const float cur_x = current_position[X_AXIS];
+    const float cur_y = current_position[Y_AXIS];
+    const float cur_z = current_position[Z_AXIS];
+    const float cur_e = current_position[E_AXIS];
+
+    SERIAL_ECHOLNPGM("[DEBUG] M1125: pre-retract Z=", cur_z, " E=", cur_e);
+
+    // Retract E by 2 mm while raising Z by 0.2 mm
+    do_blocking_move_to(xyze_pos_t{ cur_x, cur_y, cur_z + 0.2f, cur_e - 2.0f }, retract_feed_mm_s);
+    planner.synchronize();
+
+    // Move to wipe point (X5 Y5) at the requested feedrate; keep current Z/E
+    do_blocking_move_to(xyze_pos_t{ 5.0f, 5.0f, current_position[Z_AXIS], current_position[E_AXIS] }, wipe_feed_mm_s);
+    planner.synchronize();
+
+    SERIAL_ECHOLNPGM("[DEBUG] M1125: post-wipe Z=", current_position[Z_AXIS], " E=", current_position[E_AXIS]);
+  #endif
+
+    #if ENABLED(NOZZLE_PARK_FEATURE)
+        // Park the nozzle using Nozzle::park (z_action 0 = use park defaults)
+        Nozzle::park(0, NOZZLE_PARK_POINT);
+    #else
+        // If nozzle park not available, do a conservative coordinate move: raise Z
+        planner.synchronize();
+        const float zraise = NOZZLE_PARK_Z_RAISE_MIN;
+        do_blocking_move_to(current_position[X_AXIS], current_position[Y_AXIS], current_position[Z_AXIS] + zraise, current_position[E_AXIS]);
+    #endif
 
     // Beep 6 times if possible (best-effort). Use ScreenHandler/BUZZ like other gcode files.
+    // Add a short safe_delay between beeps so they are audible as separate tones
     for (uint8_t i = 0; i < 6; ++i) {
       // BUZZ takes (duration, frequency)
       BUZZ(200, 100);
+      // 200 ms gap between beeps to make them distinct. Use safe_delay so
+      // background tasks and watchdog handling continue to run.
+      safe_delay(200);
     }
 
 
@@ -257,30 +368,30 @@ void GcodeSuite::M1125() {
     // Start heater idle timers and save current targets so we can
     // re-apply them on resume if the heaters are automatically disabled
     // by the pause timeout. Use the same timeout value as advanced pause.
-  #if HEATER_IDLE_HANDLER && !M1125_USE_LOCAL_HEATER_IDLE
-    const millis_t nozzle_timeout = SEC_TO_MS(PAUSE_PARK_NOZZLE_TIMEOUT);
-    HOTEND_LOOP() {
-      m1125_saved_target_hotend[e] = thermalManager.degTargetHotend(e);
-      thermalManager.heater_idle[e].start(nozzle_timeout);
-    }
-  #if HAS_HEATED_BED
-    m1125_saved_target_bed = thermalManager.degTargetBed();
-    thermalManager.heater_idle[thermalManager.IDLE_INDEX_BED].start(nozzle_timeout);
-  #endif
-  #else
-    // Local idle timers: save targets and start simple per-heater timers
-    const millis_t nozzle_timeout = SEC_TO_MS(PAUSE_PARK_NOZZLE_TIMEOUT);
-  #if HAS_HOTEND
-    HOTEND_LOOP() {
-      m1125_saved_target_hotend[e] = thermalManager.degTargetHotend(e);
-      m1125_local_hotend_idle[e].start(nozzle_timeout);
-    }
-  #endif
-  #if HAS_HEATED_BED
-    m1125_saved_target_bed = thermalManager.degTargetBed();
-    m1125_local_bed_idle.start(nozzle_timeout);
-  #endif
-  #endif // HEATER_IDLE_HANDLER
+    #if HEATER_IDLE_HANDLER && !M1125_USE_LOCAL_HEATER_IDLE
+      const millis_t nozzle_timeout = SEC_TO_MS(PAUSE_PARK_NOZZLE_TIMEOUT);
+      HOTEND_LOOP() {
+        m1125_saved_target_hotend[e] = thermalManager.degTargetHotend(e);
+        thermalManager.heater_idle[e].start(nozzle_timeout);
+      }
+    #if HAS_HEATED_BED
+      m1125_saved_target_bed = thermalManager.degTargetBed();
+      thermalManager.heater_idle[thermalManager.IDLE_INDEX_BED].start(nozzle_timeout);
+    #endif
+    #else
+      // Local idle timers: save targets and start simple per-heater timers
+      const millis_t nozzle_timeout = SEC_TO_MS(PAUSE_PARK_NOZZLE_TIMEOUT);
+    #if HAS_HOTEND
+      HOTEND_LOOP() {
+        m1125_saved_target_hotend[e] = thermalManager.degTargetHotend(e);
+        m1125_local_hotend_idle[e].start(nozzle_timeout);
+      }
+    #endif
+    #if HAS_HEATED_BED
+      m1125_saved_target_bed = thermalManager.degTargetBed();
+      m1125_local_bed_idle.start(nozzle_timeout);
+    #endif
+    #endif // HEATER_IDLE_HANDLER
 
     // Mark M1125 pause active so background watcher can act on timeouts
     m1125_pause_active = true;
@@ -297,97 +408,111 @@ void GcodeSuite::M1125() {
   // the generic "Print Paused" message and overwrite the "Nozzle Parked."
   // M1125 must keep its own status string visible, so skip the reset
   // when the DGUS CR6 UI is in use.
-#if DISABLED(DGUS_LCD_UI_CR6_COMM)
-  IF_DISABLED(DWIN_CREALITY_LCD, ui.reset_status());
-#else
-  /* Intentionally omitted for DGUS CR6 UI to preserve "Nozzle Parked." */
-#endif
+    #if DISABLED(DGUS_LCD_UI_CR6_COMM)
+      IF_DISABLED(DWIN_CREALITY_LCD, ui.reset_status());
+    #else
+      /* Intentionally omitted for DGUS CR6 UI to preserve "Nozzle Parked." */
+    #endif
 
-      #if ENABLED(HOST_ACTION_COMMANDS)
-        TERN_(HOST_PROMPT_SUPPORT, hostui.prompt_open(PROMPT_PAUSE_RESUME, F("Pause SD"), F("Resume")));
-        #ifdef ACTION_ON_PAUSE
+    #if ENABLED(HOST_ACTION_COMMANDS)
+      // Notify host prompt support if enabled, but only call HostUI::pause()
+      // for host-driven pauses. SD-driven pauses should not flip the
+      // canonical PrintSource to HOST nor inject host pause actions.
+      TERN_(HOST_PROMPT_SUPPORT, hostui.prompt_open(PROMPT_PAUSE_RESUME, F("Pause SD"), F("Resume")));
+      #ifdef ACTION_ON_PAUSE
+        if (!sd_printing) {
           hostui.pause();
-        #endif
+        }
       #endif
+    #endif
     }
-
     return;
   }
 
   if (hasR && !hasP) {
     // --- RESUME ---
-  ui.set_status_P(PSTR("Resuming print..."));
+    ui.set_status_P(PSTR("Resuming print..."));
 
-  if (m1125_have_saved_position) {
-        // Don't move the nozzle back immediately on RESUME. Re-apply heater
-        // targets first (below) and defer any motion until heaters reach the
-        // requested targets. The poll helper `m1125_poll_resume()` will
-        // finalize the resume and perform the saved-position restore once
-        // temperatures are within the allowed window.
-        SERIAL_ECHOLNPGM("[DEBUG] M1125: resume requested; saved position available X=", m1125_saved_position.x);
-        SERIAL_ECHOLNPGM("[DEBUG] M1125: resume requested; saved position Y=", m1125_saved_position.y);
-        SERIAL_ECHOLNPGM("[DEBUG] M1125: resume requested; saved position Z=", m1125_saved_position.z);
-        // Leave m1125_have_saved_position true until the poll finalizes the resume
-        // so the finalizer knows to restore the nozzle position at the right time.
-      }
+    if (m1125_have_saved_position) {
+      // Don't move the nozzle back immediately on RESUME. Re-apply heater
+      // targets first (below) and defer any motion until heaters reach the
+      // requested targets. The poll helper `m1125_poll_resume()` will
+      // finalize the resume and perform the saved-position restore once
+      // temperatures are within the allowed window.
+      SERIAL_ECHOLNPGM("[DEBUG] M1125: resume requested; saved position available X=", m1125_saved_position.x);
+      SERIAL_ECHOLNPGM("[DEBUG] M1125: resume requested; saved position Y=", m1125_saved_position.y);
+      SERIAL_ECHOLNPGM("[DEBUG] M1125: resume requested; saved position Z=", m1125_saved_position.z);
+      // Leave m1125_have_saved_position true until the poll finalizes the resume
+      // so the finalizer knows to restore the nozzle position at the right time.
+    }
 
-      // Optional resume feedrate parameter (F) in mm/min. Convert to mm/s for
-      // do_blocking_move_to which expects mm/s. If F is not provided, use the
-      // stored default value.
-      if (parser.seenval('F')) {
-        const float feed_mm_per_min = parser.value_float();
-        m1125_resume_feedrate_mm_s = MMM_TO_MMS(feed_mm_per_min);
-        SERIAL_ECHOLNPAIR("[DEBUG] M1125: resume feedrate set to mm/s=", m1125_resume_feedrate_mm_s);
-      }
+    // Optional resume feedrate parameter (F) in mm/min. Convert to mm/s for
+    // do_blocking_move_to which expects mm/s. If F is not provided, use the
+    // stored default value.
+    if (parser.seenval('F')) {
+      const float feed_mm_per_min = parser.value_float();
+      m1125_resume_feedrate_mm_s = MMM_TO_MMS(feed_mm_per_min);
+      SERIAL_ECHOLNPAIR("[DEBUG] M1125: resume feedrate set to mm/s=", m1125_resume_feedrate_mm_s);
+    }
 
     // If M1125 previously started idle timers, reset them and restore
     // saved heater targets if we auto-disabled them due to timeout.
-  // Reset idle timers and (re-)apply saved heater targets *before* resuming.
-  // We re-apply saved targets unconditionally (if non-zero) so the printer
-  // always returns to the same thermal state that was present when paused.
-  #if HEATER_IDLE_HANDLER && !M1125_USE_LOCAL_HEATER_IDLE
-    HOTEND_LOOP() {
-      thermalManager.reset_hotend_idle_timer(e);
-      if (m1125_saved_target_hotend[e] > 0)
-        thermalManager.setTargetHotend(m1125_saved_target_hotend[e], e);
-    }
-  #if HAS_HEATED_BED
-    thermalManager.reset_bed_idle_timer();
-    if (m1125_saved_target_bed > 0)
-      thermalManager.setTargetBed(m1125_saved_target_bed);
-  #endif
-  #else
-    // Local idle timers: reset and re-apply saved targets (if any)
-  #if HAS_HOTEND
-    HOTEND_LOOP() {
-      m1125_local_hotend_idle[e].reset();
-      if (m1125_saved_target_hotend[e] > 0)
-        thermalManager.setTargetHotend(m1125_saved_target_hotend[e], e);
-    }
-  #endif
-  #if HAS_HEATED_BED
-    m1125_local_bed_idle.reset();
-    if (m1125_saved_target_bed > 0)
-      thermalManager.setTargetBed(m1125_saved_target_bed);
-  #endif
-  #endif // HEATER_IDLE_HANDLER
+    // Reset idle timers and (re-)apply saved heater targets *before* resuming.
+    // We re-apply saved targets unconditionally (if non-zero) so the printer
+    // always returns to the same thermal state that was present when paused.
+    #if HEATER_IDLE_HANDLER && !M1125_USE_LOCAL_HEATER_IDLE
+      HOTEND_LOOP() {
+        thermalManager.reset_hotend_idle_timer(e);
+        if (m1125_saved_target_hotend[e] > 0)
+          thermalManager.setTargetHotend(m1125_saved_target_hotend[e], e);
+      }
+    #if HAS_HEATED_BED
+      thermalManager.reset_bed_idle_timer();
+      if (m1125_saved_target_bed > 0)
+        thermalManager.setTargetBed(m1125_saved_target_bed);
+    #endif
+    #else
+      // Local idle timers: reset and re-apply saved targets (if any)
+      #if HAS_HOTEND
+        HOTEND_LOOP() {
+          m1125_local_hotend_idle[e].reset();
+          if (m1125_saved_target_hotend[e] > 0)
+            thermalManager.setTargetHotend(m1125_saved_target_hotend[e], e);
+        }
+      #endif
+      #if HAS_HEATED_BED
+        m1125_local_bed_idle.reset();
+        if (m1125_saved_target_bed > 0)
+          thermalManager.setTargetBed(m1125_saved_target_bed);
+      #endif
+    #endif // HEATER_IDLE_HANDLER
 
-  // Non-blocking resume: set state so the periodic poll will wait for
-  // heaters to reach their targets and finalize resume when ready.
-  // NOTE: Do NOT clear `m1125_pause_active` or start/resume the job here.
-  // The periodic poll `M1125_CheckAndHandleHeaterTimeout()` (which calls
-  // `m1125_poll_resume()`) is responsible for finalizing the resume once
-  // saved heater targets are reached. Leaving `m1125_pause_active` true
-  // preserves the M1125-owned pause semantics (including suppression of
-  // the auto-job timer) until resume is completed.
-  m1125_resume_pending = true;
-  // Decide whether to resume SD printing or host-controlled printing when ready.
-  m1125_resume_do_sd = card.isFileOpen() && !card.isStillPrinting();
-  m1125_resume_do_host = !card.isFileOpen();
+    // Non-blocking resume: set state so the periodic poll will wait for
+    // heaters to reach their targets and finalize resume when ready.
+    // NOTE: Do NOT clear `m1125_pause_active` or start/resume the job here.
+    // The periodic poll `M1125_CheckAndHandleHeaterTimeout()` (which calls
+    // `m1125_poll_resume()`) is responsible for finalizing the resume once
+    // saved heater targets are reached. Leaving `m1125_pause_active` true
+    // preserves the M1125-owned pause semantics (including suppression of
+    // the auto-job timer) until resume is completed.
+    m1125_resume_pending = true;
+    // Decide whether to resume SD printing or host-controlled printing when ready.
+    // Use the canonical PrintSource set at pause time rather than the current
+    // card state. A file may be open (card.isFileOpen()) even when the active
+    // print was driven by the host; using PrintSource prevents incorrectly
+    // restoring E (extruder) when resuming a host-controlled print.
+    m1125_resume_do_sd = PrintSource::printingFromSDCard();
+    m1125_resume_do_host = PrintSource::printingFromHost();
 
-  // Do not perform any immediate resume/start actions here. The poll helper
-  // will perform the actual resume (startOrResumeFilePrinting, ui.resume_print,
-  // print_job_timer.start()) once temperatures match the saved targets.
+    // Do not perform any immediate resume/start actions here. The poll helper
+    // will perform the actual resume (startOrResumeFilePrinting, ui.resume_print,
+    // print_job_timer.start()) once temperatures match the saved targets.
+    // Trigger an immediate poll of the resume state machine so host-driven
+    // resumes (for example via OctoPrint) complete even when the DGUS UI
+    // polling path is not actively calling the timeout helper. This ensures
+    // resume finalization (clearing m1125_pause_active) happens promptly
+    // when temperatures are already at target.
+    M1125_CheckAndHandleHeaterTimeout();
   return;
   }
 
@@ -511,14 +636,22 @@ static bool m1125_poll_resume() {
       const celsius_t tgt = m1125_saved_target_hotend[e];
       if (tgt > 0) {
         const int whole = thermalManager.wholeDegHotend(e);
-        if (ABS(whole - int(tgt)) > (TEMP_WINDOW)) return false; // still heating
+        if (ABS(whole - int(tgt)) > (TEMP_WINDOW)) {
+          // Still heating: update UI so user sees that resume is pending
+          // because we are waiting for the heaters to reach target.
+          ui.set_status_P(PSTR("Resuming print... waiting for heater..."));
+          return false; // still heating
+        }
       }
     }
   #endif
   #if HAS_HEATED_BED
     if (m1125_saved_target_bed > 0) {
       const int whole_bed = thermalManager.wholeDegBed();
-      if (ABS(whole_bed - int(m1125_saved_target_bed)) > (TEMP_BED_WINDOW)) return false;
+      if (ABS(whole_bed - int(m1125_saved_target_bed)) > (TEMP_BED_WINDOW)) {
+        ui.set_status_P(PSTR("Resuming print... waiting for heater..."));
+        return false;
+      }
     }
   #endif
 
@@ -530,15 +663,34 @@ static bool m1125_poll_resume() {
     SERIAL_ECHOLNPGM("[DEBUG] M1125: finalizing resume - restoring position X=", m1125_saved_position.x);
     SERIAL_ECHOLNPGM("[DEBUG] M1125: finalizing resume - restoring position Y=", m1125_saved_position.y);
     SERIAL_ECHOLNPGM("[DEBUG] M1125: finalizing resume - restoring position Z=", m1125_saved_position.z);
-  planner.synchronize();
-  // Use user-specified resume feedrate (mm/s) when moving back from the
-  // nozzle park point to the saved print position. Use the xyze overload
-  // to avoid macro/overload ambiguity.
-  do_blocking_move_to(xyze_pos_t{ m1125_saved_position.x, m1125_saved_position.y, m1125_saved_position.z, current_position[E_AXIS] }, m1125_resume_feedrate_mm_s);
+    planner.synchronize();
+    // Use user-specified resume feedrate (mm/s) when moving back from the
+    // nozzle park point to the saved print position. Use the xyze overload
+    // to avoid macro/overload ambiguity.
+    // Extra debug: log current vs saved before the blocking move so we can
+    // diagnose cases where Z is not restored.
+    PORT_REDIRECT(SerialMask::All);
+    SERIAL_ECHOLNPGM("[DEBUG] M1125: about to move -> saved_pos = ", m1125_saved_position.x, ", ", m1125_saved_position.y, ", ", m1125_saved_position.z);
+    SERIAL_ECHOLNPGM("[DEBUG] M1125: about to move -> current_pos = ", current_position[X_AXIS], ", ", current_position[Y_AXIS], ", ", current_position[Z_AXIS]);
+    do_blocking_move_to(xyze_pos_t{ m1125_saved_position.x, m1125_saved_position.y, m1125_saved_position.z, current_position[E_AXIS] }, m1125_resume_feedrate_mm_s);
+    planner.synchronize();
+    PORT_REDIRECT(SerialMask::All);
+    SERIAL_ECHOLNPGM("[DEBUG] M1125: after restore move - current_pos = ", current_position[X_AXIS], ", ", current_position[Y_AXIS], ", ", current_position[Z_AXIS]);
     // Restore extruder position (E) - account for planner/extruder states.
     const float saved_e = m1125_saved_position.e;
-    current_position[E_AXIS] = saved_e;
-    planner.set_e_position_mm(saved_e);
+    // If we are resuming an SD print, restore the saved E so SD file
+    // absolute extrusion positions continue correctly. If we are
+    // resuming a host-controlled print (OctoPrint/Host commands may
+    // have changed E while paused), skip restoring E to avoid forcing
+    // a large absolute extruder correction that can cause motor noise.
+    if (m1125_resume_do_sd) {
+      current_position[E_AXIS] = saved_e;
+      planner.set_e_position_mm(saved_e);
+    }
+    else {
+      // Host resume: leave current_position[E_AXIS] as-is. Log for debug.
+      SERIAL_ECHOLNPGM("[DEBUG] M1125: host resume - skipping E restore");
+    }
     m1125_have_saved_position = false;
   }
 
@@ -560,23 +712,33 @@ static bool m1125_poll_resume() {
       // Before resuming SD printing, restore any commands that were
       // preserved from the ring buffer at pause-time so they execute in
       // the original order and no commands are lost.
-    if (m1125_saved_cmd_count) {
-        for (uint8_t i = 0; i < m1125_saved_cmd_count; ++i) {
-          // Copy saved command back into the ring buffer at the write pos
-          const uint8_t wp = queue.ring_buffer.index_w;
-          queue.ring_buffer.commands[wp] = m1125_saved_commands[i];
-          queue.ring_buffer.advance_w();
-        }
+      if (m1125_saved_cmd_count) {
+          PORT_REDIRECT(SerialMask::All);
+          for (uint8_t i = 0; i < m1125_saved_cmd_count; ++i) {
+            // Copy saved command back into the ring buffer at the write pos
+            const uint8_t wp = queue.ring_buffer.index_w;
+            queue.ring_buffer.commands[wp] = m1125_saved_commands[i];
+            queue.ring_buffer.advance_w();
+
+            SERIAL_ECHOPGM("[DEBUG] M1125: restoring saved SD cmd[");
+            SERIAL_ECHO(i);
+            SERIAL_ECHOPGM("] -> ");
+            SERIAL_ECHOLN(m1125_saved_commands[i].buffer);
+          }
         SERIAL_ECHOLNPAIR("[DEBUG] M1125: restored ", m1125_saved_cmd_count);
         SERIAL_ECHOLNPGM(" queued SD commands on resume");
         m1125_saved_cmd_count = 0;
       }
+      // Mark canonical source and resume SD print
+      PrintSource::set_printing_from_sd();
       card.startOrResumeFilePrinting();
       startOrResumeJob();
     }
   }
 
   if (m1125_resume_do_host) {
+    // Mark canonical source and resume host-driven print
+    PrintSource::set_printing_from_host();
     ui.resume_print();
   }
 
@@ -649,54 +811,43 @@ void M1125_TimeoutContinueAction() {
   M1125_TimeoutContinueRecovery();
 }
 
-#if 0
-// If heaters were disabled by the timeout and the user presses Continue,
-// re-apply saved heater targets and restart the idle timers so heating
-// resumes. This allows Continue to recover from the disabled state.
-//
-// NOTE: Previously this only ran when `m1125_heaters_disabled_by_timeout`
-// was true. That caused a race where the user pressed Continue to extend
-// timers but the heaters were later disabled and Continue did not reapply
-// targets because the flag had not been set. Make this function always
-// re-apply saved targets so Continue always restarts heating/timers.
-#endif
 void M1125_TimeoutContinueRecovery() {
 
   // Re-apply saved targets and restart timers based on global/local mode.
-#if HEATER_IDLE_HANDLER && !M1125_USE_LOCAL_HEATER_IDLE
-  const millis_t nozzle_timeout = SEC_TO_MS(PAUSE_PARK_NOZZLE_TIMEOUT);
-  #if HAS_HOTEND
-    HOTEND_LOOP() {
-      if (m1125_saved_target_hotend[e] > 0) {
-        thermalManager.setTargetHotend(m1125_saved_target_hotend[e], e);
+  #if HEATER_IDLE_HANDLER && !M1125_USE_LOCAL_HEATER_IDLE
+    const millis_t nozzle_timeout = SEC_TO_MS(PAUSE_PARK_NOZZLE_TIMEOUT);
+    #if HAS_HOTEND
+      HOTEND_LOOP() {
+        if (m1125_saved_target_hotend[e] > 0) {
+          thermalManager.setTargetHotend(m1125_saved_target_hotend[e], e);
+        }
+        thermalManager.heater_idle[e].start(nozzle_timeout);
       }
-      thermalManager.heater_idle[e].start(nozzle_timeout);
-    }
-  #endif
-  #if HAS_HEATED_BED
-    if (m1125_saved_target_bed > 0) thermalManager.setTargetBed(m1125_saved_target_bed);
-    thermalManager.heater_idle[thermalManager.IDLE_INDEX_BED].start(nozzle_timeout);
-  #endif
-#else
-  const millis_t nozzle_timeout = SEC_TO_MS(PAUSE_PARK_NOZZLE_TIMEOUT);
-  #if HAS_HOTEND
-    HOTEND_LOOP() {
-      if (m1125_saved_target_hotend[e] > 0) {
-        SERIAL_ECHOLNPAIR("[DEBUG] M1125: re-applying saved hotend target[", e);
-        SERIAL_ECHOLNPAIR("] = ", m1125_saved_target_hotend[e]);
-        thermalManager.setTargetHotend(m1125_saved_target_hotend[e], e);
+    #endif
+    #if HAS_HEATED_BED
+      if (m1125_saved_target_bed > 0) thermalManager.setTargetBed(m1125_saved_target_bed);
+      thermalManager.heater_idle[thermalManager.IDLE_INDEX_BED].start(nozzle_timeout);
+    #endif
+  #else
+    const millis_t nozzle_timeout = SEC_TO_MS(PAUSE_PARK_NOZZLE_TIMEOUT);
+    #if HAS_HOTEND
+      HOTEND_LOOP() {
+        if (m1125_saved_target_hotend[e] > 0) {
+          SERIAL_ECHOLNPAIR("[DEBUG] M1125: re-applying saved hotend target[", e);
+          SERIAL_ECHOLNPAIR("] = ", m1125_saved_target_hotend[e]);
+          thermalManager.setTargetHotend(m1125_saved_target_hotend[e], e);
+        }
+        m1125_local_hotend_idle[e].start(nozzle_timeout);
       }
-      m1125_local_hotend_idle[e].start(nozzle_timeout);
-    }
+    #endif
+    #if HAS_HEATED_BED
+      if (m1125_saved_target_bed > 0) {
+        SERIAL_ECHOLNPAIR("[DEBUG] M1125: re-applying saved bed target = ", m1125_saved_target_bed);
+        thermalManager.setTargetBed(m1125_saved_target_bed);
+      }
+      m1125_local_bed_idle.start(nozzle_timeout);
+    #endif
   #endif
-  #if HAS_HEATED_BED
-    if (m1125_saved_target_bed > 0) {
-      SERIAL_ECHOLNPAIR("[DEBUG] M1125: re-applying saved bed target = ", m1125_saved_target_bed);
-      thermalManager.setTargetBed(m1125_saved_target_bed);
-    }
-    m1125_local_bed_idle.start(nozzle_timeout);
-  #endif
-#endif
 
 
   // Mark heaters as no longer disabled by timeout
@@ -712,4 +863,47 @@ void M1125_TimeoutContinueRecovery() {
 // whether M1125 currently owns the paused state. Used only for logging
 // and debugging; keeps linkage internal to this translation unit.
 bool M1125_IsPauseActive() { return m1125_pause_active; }
+
+// Abort/clear any M1125 pause state. Called when a print is cancelled
+// or aborted so leftover timers/pending resume state do not present
+// heater-timeout popups or leave M1125 in a half-active state.
+void M1125_AbortPause() {
+  // Clear pause bookkeeping and pending resume
+  m1125_pause_active = false;
+  m1125_resume_pending = false;
+  m1125_have_saved_position = false;
+  m1125_saved_cmd_count = 0;
+  m1125_timeout_pending = false;
+  m1125_heaters_disabled_by_timeout = false;
+
+  // Reset local idle timers and saved targets
+  #if HEATER_IDLE_HANDLER && !M1125_USE_LOCAL_HEATER_IDLE
+    HOTEND_LOOP() { m1125_saved_target_hotend[e] = 0; thermalManager.reset_hotend_idle_timer(e); }
+    #if HAS_HEATED_BED
+      m1125_saved_target_bed = 0; thermalManager.reset_bed_idle_timer();
+    #endif
+  #else
+    #if HAS_HOTEND
+      HOTEND_LOOP() { m1125_local_hotend_idle[e].reset(); m1125_saved_target_hotend[e] = 0; }
+    #endif
+    #if HAS_HEATED_BED
+      m1125_local_bed_idle.reset(); m1125_saved_target_bed = 0;
+    #endif
+  #endif
+
+  // Clear suppression and any UI hook that was preventing popup responses
+  M1125_ClearAutoJobTimerSuppress();
+  #if ENABLED(DGUS_LCD_UI_CR6_COMM)
+    DGUSScreenHandler::SetSuppressPopupPauseResponse(false);
+  #endif
+  ui.set_status_P(PSTR(""));
+
+  // Clear saved command buffer (m1125_saved_cmd_count is set to 0 above so
+  // the saved buffer will be ignored). Avoid calling methods on CommandLine
+  // whose API may be internal to the ring buffer implementation.
+
+  // Debug
+  PORT_REDIRECT(SerialMask::All);
+  SERIAL_ECHOLNPGM("[DEBUG] M1125: AbortPause() called - M1125 state cleared");
+}
 

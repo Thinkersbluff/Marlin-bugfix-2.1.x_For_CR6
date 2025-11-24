@@ -42,7 +42,10 @@ enum DGUSLCD_Screens : uint8_t {
   // host-controlled print is active. Mapped to the same VP list as the
   // normal print screen so status data updates identically.
   DGUSLCD_SCREEN_PRINT_RUNNING_HOST = 82,
-
+  
+  // Dedicated host-paused screen: mirror of DGUSLCD_SCREEN_PRINT_PAUSED but
+  // shown when the canonical PrintSource indicates the job is from Host.
+  DGUSLCD_SCREEN_PRINT_PAUSED_HOST = 83,
   DGUSLCD_SCREEN_DIALOG_PAUSE = 38,    // DWINTouchPage::DIALOG_PAUSE_PRINTING
   DGUSLCD_SCREEN_DIALOG_RESUME = 65,   // DWINTouchPage::DIALOG_RESUME_PRINTING
   DGUSLCD_SCREEN_DIALOG_STOP = 40,     // DWINTouchPage::DIALOG_STOP_PRINTING
@@ -83,7 +86,8 @@ enum DGUSLCD_Screens : uint8_t {
   DGUSLCD_SCREEN_TUNEFWRETRACT = 70,
 
   DGUSLCD_SCREEN_ESTEPS_CALIBRATION_RESULTS = 71,
-  DGUSLCD_SCREEN_LEVELING_SETTINGS = 72,
+  // DGUSLCD_SCREEN_LEVELING_SETTINGS removed - probe preheat/stabilization
+  // is now a compile-time decision in Marlin. Screen 72 deleted.
 
   DGUSLCD_SCREEN_AXIS_SETTINGS_NAV = 73,
   DGUSLCD_SCREEN_AXIS_SETTINGS_AXIS = 74,
@@ -486,16 +490,16 @@ constexpr uint16_t VP_LINEAR_ADVANCE_FACTOR = 0x22AF;
 constexpr uint16_t VP_OTHER_TUNE_NAV_BUTTON = 0x2382;
 
 // Leveling settings
-constexpr uint16_t VP_TOGGLE_PROBING_HEATERS_OFF_ONOFF_BUTTON = 0x22C1;
-constexpr uint16_t VP_TOGGLE_PROBING_HEATERS_OFF_ONOFF_ICON = 0x22C3;
+// constexpr uint16_t VP_TOGGLE_PROBING_HEATERS_OFF_ONOFF_BUTTON = 0x22C1;
+// constexpr uint16_t VP_TOGGLE_PROBING_HEATERS_OFF_ONOFF_ICON = 0x22C3;
 
-constexpr uint16_t VP_TOGGLE_PROBE_PREHEAT_HOTEND_TEMP = 0x22C5;
-constexpr uint16_t VP_TOGGLE_PROBE_PREHEAT_BED_TEMP = 0x22C7;
+// constexpr uint16_t VP_TOGGLE_PROBE_PREHEAT_HOTEND_TEMP = 0x22C5;
+// constexpr uint16_t VP_TOGGLE_PROBE_PREHEAT_BED_TEMP = 0x22C7;
 
-constexpr uint16_t VP_TOGGLE_PROBE_SETTINGS_NAV_BUTTON = 0x22C9;
+// constexpr uint16_t VP_TOGGLE_PROBE_SETTINGS_NAV_BUTTON = 0x22C9;
 
-constexpr uint16_t VP_TOGGLE_POST_PROBING_TEMPERATURE_STABILIZATION_ICON = 0x22CD;
-constexpr uint16_t VP_TOGGLE_POST_PROBING_TEMPERATURE_STABILIZATION_BUTTON = 0x22CF;
+// constexpr uint16_t VP_TOGGLE_POST_PROBING_TEMPERATURE_STABILIZATION_ICON = 0x22CD;
+// constexpr uint16_t VP_TOGGLE_POST_PROBING_TEMPERATURE_STABILIZATION_BUTTON = 0x22CF;
 
 constexpr uint16_t VP_LEVELING_FADE_HEIGHT = 0x231D;
 

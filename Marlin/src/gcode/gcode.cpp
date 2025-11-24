@@ -981,6 +981,16 @@ void GcodeSuite::process_parsed_command(bool no_ok/*=false*/) {
         case 593: M593(); break;                                  // M593: Input Shaping control
       #endif
 
+      // If the CR6 community DGUS UI provides the M1125 pause handler and
+      // the Marlin ADVANCED_PAUSE_FEATURE is not enabled, accept M600 as an
+      // alias for the M1125 pause/park command. This lets hosts that send
+      // M600 interoperate with the CR6 UI which implements pause as M1125 P.
+      // Do this only when ADVANCED_PAUSE_FEATURE is disabled so we don't
+      // shadow the normal M600 implementation when advanced pause is in use.
+      #if DISABLED(ADVANCED_PAUSE_FEATURE) && ENABLED(DGUS_LCD_UI_CR6_COMM)
+        case 600: process_subcommands_now(F("M1125 P")); break; // M600 -> M1125 P alias
+      #endif
+
       #if ENABLED(ADVANCED_PAUSE_FEATURE)
         case 600: M600(); break;                                  // M600: Pause for Filament Change
         #if ENABLED(CONFIGURE_FILAMENT_CHANGE)

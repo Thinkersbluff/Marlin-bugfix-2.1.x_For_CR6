@@ -32,6 +32,8 @@
 
 #include "cardreader.h"
 
+#include "../feature/print_source.h"
+
 #include "../MarlinCore.h"
 #include "../libs/hex_print.h"
 #include "../lcd/marlinui.h"
@@ -63,6 +65,8 @@
 #if ENABLED(ONE_CLICK_PRINT)
   #include "../../src/lcd/menu/menu.h"
 #endif
+
+#include "../gcode/custom/M1125.h"
 
 #define DEBUG_OUT ANY(DEBUG_CARDREADER, MARLIN_DEV_MODE)
 #include "../core/debug_out.h"
@@ -501,13 +505,25 @@ void CardReader::mount() {
   if (flag.mounted)
     cdroot();
   else {
+    /*
+     * If mounting failed, show an appropriate alert.
+     * Avoid showing an SD-specific "SD Card Init Fail" on boards
+     * that have no SD-detect line (where isSDCardInserted() is
+     * always true). In that case use the generic media failure
+     * message to avoid confusing the user when printing from Host.
+     */
     #if ANY(HAS_SD_DETECT, HAS_USB_FLASH_DRIVE)
       if (marlin_state != MarlinState::MF_INITIALIZING) {
-        if (isSDCardSelected())
-          LCD_ALERTMESSAGE(MSG_MEDIA_INIT_FAIL_SD);
-        else if (isFlashDriveSelected())
-          LCD_ALERTMESSAGE(MSG_MEDIA_INIT_FAIL_USB);
-        else
+        #if HAS_SD_DETECT
+          if (isSDCardSelected())
+            LCD_ALERTMESSAGE(MSG_MEDIA_INIT_FAIL_SD);
+          else
+        #endif
+        #if HAS_USB_FLASH_DRIVE
+          if (isFlashDriveSelected())
+            LCD_ALERTMESSAGE(MSG_MEDIA_INIT_FAIL_USB);
+          else
+        #endif
           LCD_ALERTMESSAGE(MSG_MEDIA_INIT_FAIL);
       }
     #endif
@@ -674,9 +690,20 @@ void CardReader::manage_media() {
 void CardReader::release() {
   if (!flag.mounted) return;
 
-  // Card removed while printing? Abort!
-  if (isStillPrinting())
-    abortFilePrintSoon();
+  // Card removed while printing or while a start is pending? Abort!
+  if (isStillPrinting() || flag.pending_print_start) {
+    // If the canonical PrintSource indicates the job is coming from SD,
+    // or a start was recently requested from SD (pending M24), the print
+    // becomes unrecoverable when media is removed. Abort immediately so
+    // the firmware state is consistent and the DGUS confirm flow can be
+    // shown. Otherwise fall back to the existing "soon" abort which
+    // allows in-flight operations to finish.
+    if (PrintSource::printingFromSDCard() || flag.pending_print_start) {
+      abortFilePrintNow();
+    } else {
+      abortFilePrintSoon();
+    }
+  }
   else
     endFilePrintNow();
 
@@ -697,6 +724,10 @@ void CardReader::openAndPrintFile(const char *name) {
   sprintf_P(cmd, M23_STR, name);
   for (char *c = &cmd[4]; *c; c++) *c = tolower(*c);
   strcat_P(cmd, PSTR("\nM24"));
+  // Mark that a print start has been requested so media removal can be
+  // handled as an immediate abort even if the canonical print source
+  // hasn't been set yet by the M24 handler.
+  flag.pending_print_start = true;
   queue.inject(cmd);
 }
 
@@ -711,6 +742,15 @@ void CardReader::startOrResumeFilePrinting() {
     flag.sdprinting = true;
     flag.sdprintdone = false;
     TERN_(SD_RESORT, flush_presort());
+    // Canonical print-source: mark that we are printing from SD/media
+    PrintSource::set_printing_from_sd();
+    // Clear any pending-start marker now that the print is actually starting
+    flag.pending_print_start = false;
+    // Debug: trace that SD resume/start was invoked and canonical source set
+    PORT_REDIRECT(SerialMask::All);
+    SERIAL_ECHOLNPGM("[DEBUG] CardReader::startOrResumeFilePrinting() called");
+    SERIAL_ECHOLNPGM("[DEBUG] card.isFileOpen()", isFileOpen());
+    SERIAL_ECHOLNPGM("[DEBUG] card.isStillPrinting()", isStillPrinting());
   }
 }
 
@@ -721,12 +761,20 @@ void CardReader::endFilePrintNow(TERN_(SD_RESORT, const bool re_sort/*=false*/))
   TERN_(ADVANCED_PAUSE_FEATURE, did_pause_print = 0);
   TERN_(DWIN_CREALITY_LCD, hmiFlag.print_finish = flag.sdprinting);
   flag.abort_sd_printing = false;
+  // Clear any pending-start marker; print is ending.
+  flag.pending_print_start = false;
   if (isFileOpen()) myfile.close();
   TERN_(SD_RESORT, if (re_sort) presort());
+
+  // If a print ended or was finished, ensure any M1125 pause state is cleared
+  // so leftover heater-timeout popups do not appear.
+  M1125_AbortPause();
 }
 
 void CardReader::abortFilePrintNow(TERN_(SD_RESORT, const bool re_sort/*=false*/)) {
   flag.sdprinting = flag.sdprintdone = false;
+  // Clear pending start if an immediate abort occurs
+  flag.pending_print_start = false;
   endFilePrintNow(TERN_(SD_RESORT, re_sort));
 }
 
@@ -845,6 +893,9 @@ void CardReader::openFileRead(const char * const path, const uint8_t subcall_typ
 
     selectFileByName(fname);
     ui.set_status(longFilename[0] ? longFilename : fname);
+    // Debug: report that a file was opened by the UI/host
+    PORT_REDIRECT(SerialMask::All);
+    SERIAL_ECHOLNPGM("[DEBUG] CardReader::openFileRead() opened file -> isFileOpen()=", isFileOpen());
   }
   else
     openFailed(fname);
@@ -1552,6 +1603,8 @@ void CardReader::fileHasFinished() {
   endFilePrintNow(TERN_(SD_RESORT, true));
 
   flag.sdprintdone = true;                    // Stop getting bytes from the SD card
+  // Print finished from SD: clear canonical source state
+  PrintSource::clear_printing_source();
   marlin_state = MarlinState::MF_SD_COMPLETE; // Tell Marlin to enqueue M1001 soon
 }
 

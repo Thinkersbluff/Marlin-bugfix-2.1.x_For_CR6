@@ -92,10 +92,14 @@ public:
 
   static void HandleUserConfirmationPopUp(uint16_t ConfirmVP, const char* line1, const char* line2, const char* line3, const char* line4, bool l1inflash, bool l2inflash, bool l3inflash, bool liinflash);
 
+  // Like HandleUserConfirmationPopUp but presents the Continue-style popup
+  // (DGUSLCD_SCREEN_POPUP == 63) rather than the Yes/No confirm (66).
+  static void HandleUserContinuePopUp(uint16_t ConfirmVP, const char* line1, const char* line2, const char* line3, const char* line4, bool l1inflash, bool l2inflash, bool l3inflash, bool liinflash);
+
   static void HandleDevelopmentTestButton(DGUS_VP_Variable &var, void *val_ptr);
 
   // Handler for M1125 heater-timeout Confirm (VP_M1125_TIMEOUT_CONFIRM)
-  // Expects a 16-bit payload: 0x0002 == YES (Continue), 0x0001 == NO (Do nothing)
+  // Expects a 16-bit payload: 0x0002 == YES (Continue), 0x0003 == NO (Do nothing)
   static void HandleM1125TimeoutConfirm(DGUS_VP_Variable &var, void *val_ptr);
 
   /// "M117" Message -- msg is a RAM ptr.
@@ -227,7 +231,14 @@ public:
     /// Marlin informed us about a bad SD Card.
     static void SDCardError();
 
+  /// Confirmed handler for abort-after-card-removed flow. Invoked by the
+  /// VP emulation path when the user confirms an SD-abort notice.
+  static void sdReallyAbort(DGUS_VP_Variable &var, void *val_ptr);
+
     static void SetPrintingFromHost();
+    // Set a short host-monitoring state string into the SD filename VP (VP_SD_Print_Filename)
+    // Used to show host monitoring state like "Octoprint: Resuming" on screens 82/83.
+    static void SetHostMonitoringState(const char* msg);
   #endif
 
   static void HandleLEDToggle();
@@ -498,6 +509,10 @@ private:
   // When synchronous ops are disabled, this is always false.
   static bool HasSynchronousOperation;
 #endif
+  // When true, OnHomingComplete / synchronous-op completion handlers
+  // should not PopToOldScreen() back to the previous screen but instead
+  // allow the SD-abort flow to present the Print Finished screen.
+  static bool SuppressPopOnSyncOpCompletion;
 
   #if ENABLED(SDSUPPORT)
     static int16_t top_file;    ///< file on top of file chooser

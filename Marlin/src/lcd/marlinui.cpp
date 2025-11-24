@@ -70,6 +70,8 @@ MarlinUI ui;
   #include "../gcode/custom/M1125.h"
 #endif
 
+#include "../feature/print_source.h"
+
 #if LCD_HAS_WAIT_FOR_MOVE
   bool MarlinUI::wait_for_move; // = false
 #endif
@@ -1842,6 +1844,15 @@ uint8_t expand_u8str_P(char * const outstr, PGM_P const ptpl, const int8_t ind, 
     TERN_(HAS_MEDIA, if (card.isPaused()) queue.inject_P(M24_STR));
     #ifdef ACTION_ON_RESUME
       hostui.resume();
+    #endif
+    // If this resume originates from the UI/Host (not SD), mark canonical source
+    #if HAS_MEDIA
+      if (!card.isFileOpen()) {
+        PrintSource::set_printing_from_host();
+      }
+    #else
+      // No media support: resume must be host-driven
+      PrintSource::set_printing_from_host();
     #endif
     // Avoid starting the print job timer if M1125 has suppressed auto-starts
     // while it owns a deterministic pause. startOrResumeJob() and other

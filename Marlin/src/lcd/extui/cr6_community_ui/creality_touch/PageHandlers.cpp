@@ -23,6 +23,7 @@
 #include "../../../marlinui.h"
 
 #include "PageHandlers.h"
+#include "../../../../feature/print_source.h"
 
 
 // Definitions of page handlers
@@ -48,7 +49,9 @@ static void store_blocking_heating_cr6() {
 // media (SD card). If printing from host, show the dedicated host
 // running screen so the UI reflects that state.
 static inline DGUSLCD_Screens choose_print_running_screen() {
-    return (ExtUI::isPrinting() && !ExtUI::isPrintingFromMedia())
+    // Use the canonical PrintSource to decide which running screen to show.
+    // Prefer the dedicated host-running screen when PrintSource reports HOST.
+    return (ExtUI::isPrinting() && PrintSource::printingFromHost())
            ? DGUSLCD_SCREEN_PRINT_RUNNING_HOST
            : DGUSLCD_SCREEN_PRINT_RUNNING;
 }
@@ -339,9 +342,9 @@ void PrintRunningMenuHandler(DGUS_VP_Variable &var, unsigned short buttonValue) 
 void PrintPausedMenuHandler(DGUS_VP_Variable &var, unsigned short buttonValue) {
     switch (var.VP) {
         case VP_BUTTON_RESUMEPRINTKEY:
-#if ENABLED(FILAMENT_RUNOUT_SENSOR)
+            #if ENABLED(FILAMENT_RUNOUT_SENSOR)
                         runout.reset();
-#endif
+            #endif
             // Mirror Pause/Stop: previously the UI presented a small confirmation
             // dialog (DIALOG_RESUME) before actually resuming. For pause-handshake
             // flows (filament change / purge) Marlin may be waiting on a user
@@ -352,7 +355,7 @@ void PrintPausedMenuHandler(DGUS_VP_Variable &var, unsigned short buttonValue) {
             // confirmation dialog.
             
             // Break any blocking heater waits during resume (like we do for pause)
-            wait_for_heatup = false;
+            // wait_for_heatup = false;
             #if HAS_RESUME_CONTINUE
             wait_for_user = false;
             #endif
@@ -361,6 +364,58 @@ void PrintPausedMenuHandler(DGUS_VP_Variable &var, unsigned short buttonValue) {
             #if ENABLED(ADVANCED_PAUSE_FEATURE)
                 ExtUI::setPauseMenuResponse(PAUSE_RESPONSE_RESUME_PRINT);
             #endif
+                // Notify the host that the user has acted so host-side
+                // prompts (e.g., OctoPrint) can dismiss their pause dialog.
+                // Only do this when the canonical print source is HOST so
+                // SD-originated prints do not signal a host.
+                if (PrintSource::printingFromHost()) ExtUI::setHostResponse(1);
+                ExtUI::setUserConfirmed();
+                ScreenHandler.GotoScreen(choose_print_running_screen());
+            }
+            else {
+                ScreenHandler.GotoScreen(DGUSLCD_SCREEN_DIALOG_RESUME);
+            }
+        break;
+
+        case VP_BUTTON_ADJUSTENTERKEY:
+            ScreenHandler.GotoScreen(DGUSLCD_SCREEN_TUNING);
+        break;
+
+        case VP_BUTTON_STOPPRINTKEY:
+            ScreenHandler.GotoScreen(DGUSLCD_SCREEN_DIALOG_STOP);
+        break;
+    }
+}
+
+// Host-print paused menu handler mirrors PrintPausedMenuHandler but is
+// registered for the host-specific paused screen so host-print flows
+// get the same button behavior.
+void HostPrintPausedMenuHandler(DGUS_VP_Variable &var, unsigned short buttonValue) {
+    switch (var.VP) {
+        case VP_BUTTON_RESUMEPRINTKEY:
+            #if ENABLED(FILAMENT_RUNOUT_SENSOR)
+                        runout.reset();
+            #endif
+            // Mirror Pause/Stop: previously the UI presented a small confirmation
+            // dialog (DIALOG_RESUME) before actually resuming. For pause-handshake
+            // flows (filament change / purge) Marlin may be waiting on a user
+            // confirmation; in that case we should treat this RESUME control as
+            // performing the same handshake (setPauseMenuResponse + setUserConfirmed)
+            // that the Confirm/Popup dialog would have done. If Marlin is not
+            // waiting, preserve the old behavior and show the small resume
+            // confirmation dialog.
+            
+            // Break any blocking heater waits during resume (like we do for pause)
+            // wait_for_heatup = false;
+            #if HAS_RESUME_CONTINUE
+            wait_for_user = false;
+            #endif
+            
+            if (ExtUI::isWaitingOnUser()) {
+            #if ENABLED(ADVANCED_PAUSE_FEATURE)
+                ExtUI::setPauseMenuResponse(PAUSE_RESPONSE_RESUME_PRINT);
+            #endif
+                if (PrintSource::printingFromHost()) ExtUI::setHostResponse(1);
                 ExtUI::setUserConfirmed();
                 ScreenHandler.GotoScreen(choose_print_running_screen());
             }
@@ -438,6 +493,7 @@ void PrintResumeDialogHandler(DGUS_VP_Variable &var, unsigned short buttonValue)
                         #if ENABLED(ADVANCED_PAUSE_FEATURE)
                         ExtUI::setPauseMenuResponse(PAUSE_RESPONSE_RESUME_PRINT);
                         #endif
+                        if (PrintSource::printingFromHost()) ExtUI::setHostResponse(1);
                         ExtUI::setUserConfirmed();
                     }
                     else {
@@ -460,8 +516,14 @@ void PrintFinishMenuHandler(DGUS_VP_Variable &var, unsigned short buttonValue) {
     switch (var.VP){
         case VP_BUTTON_MAINENTERKEY:
             switch (buttonValue) {
-                case 5:
+                case 5://User presses "Exit" button on Print Finished screen
+                    // Clear canonical print source now that the user has exited
+                    // the Print Finished flow. This avoids race conditions that
+                    // would otherwise cause the firmware to transiently detect
+                    // a Host-streamed print when the SD was removed earlier.
+                    PrintSource::clear_printing_source();
                     ScreenHandler.GotoScreen(DGUSLCD_SCREEN_MAIN);
+                    ScreenHandler.setstatusmessage("");
                     break;
                 }
                 break;
@@ -583,6 +645,7 @@ const struct PageHandler PageHandlers[] PROGMEM = {
     PAGE_HANDLER(DGUSLCD_Screens::DGUSLCD_SCREEN_PRINT_RUNNING, PrintRunningMenuHandler)
     PAGE_HANDLER(DGUSLCD_Screens::DGUSLCD_SCREEN_PRINT_RUNNING_HOST, PrintRunningMenuHandler)
     PAGE_HANDLER(DGUSLCD_Screens::DGUSLCD_SCREEN_PRINT_PAUSED, PrintPausedMenuHandler)
+    PAGE_HANDLER(DGUSLCD_Screens::DGUSLCD_SCREEN_PRINT_PAUSED_HOST, HostPrintPausedMenuHandler)
     PAGE_HANDLER(DGUSLCD_Screens::DGUSLCD_SCREEN_PRINT_FINISH, PrintFinishMenuHandler)
 
 

@@ -28,6 +28,8 @@
 #include "DGUSDisplay.h"
 #include "DGUSVPVariable.h"
 #include "DGUSDisplayDef.h"
+#include "../../../feature/print_source.h"
+#include "dgus_handler_whitelist.h"
 // Include handlers from creality_touch so we can persist handler state
 #include "creality_touch/EstepsHandler.h"
 #include "creality_touch/PIDHandler.h"
@@ -96,6 +98,11 @@ bool DGUSScreenHandler::HasSynchronousOperation;
 // When synchronous ops are disabled at compile time, keep the flag defined once and initialized to false
 bool DGUSScreenHandler::HasSynchronousOperation = false;
 #endif
+
+// When true, OnHomingComplete should avoid popping back to the previous
+// screen and instead allow the SD-abort flow to present the Print Finished
+// screen. Default false.
+bool DGUSScreenHandler::SuppressPopOnSyncOpCompletion = false;
 
 bool DGUSScreenHandler::HasScreenVersionMismatch;
 uint8_t DGUSScreenHandler::MeshLevelIndex = -1;
@@ -310,6 +317,23 @@ void DGUSScreenHandler::HandleUserConfirmationPopUp(uint16_t VP, const char* lin
   SERIAL_ECHOLNPAIR("ConfirmVP set to ", ConfirmVP);
   sendinfoscreen(line1, line2, line3, line4, l1, l2, l3, l4);
   ScreenHandler.GotoScreen(DGUSLCD_SCREEN_CONFIRM);
+}
+
+// Like HandleUserConfirmationPopUp but uses the Continue-style popup screen
+// (DGUSLCD_SCREEN_POPUP == 63) instead of the Yes/No confirm (66). This
+// is useful for SD-abort flows where we want the DGUS 'Continue'-style UI.
+void DGUSScreenHandler::HandleUserContinuePopUp(uint16_t VP, const char* line1, const char* line2, const char* line3, const char* line4, bool l1, bool l2, bool l3, bool l4) {
+  if (current_screen == DGUSLCD_SCREEN_POPUP) {
+    // Already showing a pop up, so we need to cancel that first.
+    PopToOldScreen();
+  }
+
+  ConfirmVP = VP;
+  // Debug: record which VP is being used for the confirmation so we can
+  // correlate display returns with firmware actions.
+  SERIAL_ECHOLNPAIR("ConfirmVP set to ", ConfirmVP);
+  sendinfoscreen(line1, line2, line3, line4, l1, l2, l3, l4);
+  ScreenHandler.GotoScreen(DGUSLCD_SCREEN_POPUP);
 }
 
 void DGUSScreenHandler::HandleDevelopmentTestButton(DGUS_VP_Variable &var, void *val_ptr) {
@@ -739,12 +763,25 @@ void DGUSScreenHandler::DGUSLCD_SendHeaterStatusToDisplay(DGUS_VP_Variable &var)
     dgusdisplay.WriteVariablePGM(VP_SD_Print_Filename, printFromHostString, VP_SD_FileName_LEN, true);
   }
 
+  void DGUSScreenHandler::SetHostMonitoringState(const char* msg) {
+    if (!msg) return;
+    // Avoid overwriting confirm/popups which use the same VP
+    if (IsConfirmActive()) return;
+
+    char buf[VP_SD_FileName_LEN + 1] = {0};
+    strncpy(buf, msg, VP_SD_FileName_LEN);
+    buf[VP_SD_FileName_LEN] = '\0';
+    dgusdisplay.WriteVariable(VP_SD_Print_Filename, buf, VP_SD_FileName_LEN, true);
+  }
+
   void DGUSScreenHandler::DGUSLCD_SD_StartPrint(DGUS_VP_Variable &var, void *val_ptr) {
+    SERIAL_ECHOLNPGM("[DEBUG] DGUSLCD_SD_StartPrint called");
     if (!filelist.seek(file_to_print)) return;
     // Ensure the printer is homed before starting this print. Queue a G28 first
     // so the homing completes before the SD print begins.
     queue.inject_P(G28_STR);
     ExtUI::printFile(filelist.shortFilename());
+    SERIAL_ECHOLNPAIR("[DEBUG] Starting print of file: ", filelist.shortFilename());
     ScreenHandler.GotoScreen(
       DGUSLCD_SCREEN_SDPRINTMANIPULATION
     );
@@ -769,16 +806,95 @@ void DGUSScreenHandler::DGUSLCD_SendHeaterStatusToDisplay(DGUS_VP_Variable &var)
   }
 
   void DGUSScreenHandler::SDCardRemoved() {
-    // Always handle media removal so the UI can react (navigate back to a safe screen)
+    ScreenHandler.setstatusmessage("SD Card Removed");
+    // If we're currently printing from SD, the print becomes unrecoverable
+    // when the media is removed. Abort immediately and present a confirmation
+    // so the user explicitly acknowledges the abort. This is intentionally
+    // unconditional (does not require M1125 to own the pause state) because
+    // an SD-sourced print cannot continue without the media.
+      // Unified handling: if the SD media is relevant to an active or
+      // recently-requested SD print (canonical SD print, a pending start,
+      // or an open SD print state), treat the removal as an abortable event.
+      // Abort the print state immediately and show a Continue-style popup
+      // so the user can acknowledge the abort. WAIT for the user in all
+      // these cases before transitioning to the Print Finished screen to
+      // ensure the UI flow is explicit and recoverable from the user's
+      // perspective.
+      if (PrintSource::printingFromSDCard() || card.flag.pending_print_start || card.isStillPrinting()) {
+        SERIAL_ECHOLNPGM("DGUS: SD card removed (canonical/pending/open SD state) -> performing immediate StopPrint/path");
+        // If a synchronous operation is active (for example: homing), the
+        // usual ExtUI::stopPrint() path may defer the SD abort via
+        // abortFilePrintSoon() and fail to run until the operation
+        // completes. In that case, invoke the CardReader immediate abort
+        // to ensure the SD job is terminated right away.
+  if (ScreenHandler.HasCurrentSynchronousOperation()) {
+          // Mark that we intentionally suppressed the usual PopToOldScreen
+          // behavior when the synchronous operation completes. This avoids
+          // the OnHomingComplete() PopToOldScreen() call from restoring
+          // the printing UI after we've already navigated to Print Finished.
+          ScreenHandler.SuppressPopOnSyncOpCompletion = true;
+          // Instead of taking a separate immediate-card abort path which
+          // diverged behavior, finish the synchronous UI operation so that
+          // the shared stopPrint() routine can run uniformly. This clears
+          // the busy/UI flag and allows ExtUI::stopPrint() to proceed
+          // without being deferred by the synchronous-op guard.
+          SERIAL_ECHOLNPGM("DGUS: synchronous op active - finishing synchronous op and running unified stopPrint()");
+          ScreenHandler.SetSynchronousOperationFinish();
+          // Make sure UI is refreshed so the display no longer shows busy
+          ScreenHandler.ForceCompleteUpdate();
+          // Purge any queued, in-memory G-code commands so that stray
+          // SD-originated commands buffered before media removal do not
+          // get executed after we begin the abort sequence. The main
+          // abort path (abortSDPrinting) will also clear the queue, but
+          // clearing here makes the behavior immediate and deterministic.
+          SERIAL_ECHOLNPGM("DGUS: Clearing command queue due to SD removal (sync-op path)");
+          queue.clear();
+          ExtUI::stopPrint();
+          ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_FINISH, false);
+        } else {
+          // Normal case: use the shared stopPrint path (per Stop-confirm)
+          // Clear queued in-memory commands right away so nothing slips
+          // through while the abort path runs. This is safe because we
+          // are aborting an SD-based print (we only get here when the
+          // canonical source was SD or a pending-start existed).
+          SERIAL_ECHOLNPGM("DGUS: Clearing command queue due to SD removal");
+          queue.clear();
+          ExtUI::stopPrint();
+          ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_FINISH, false);
+        }
+        return;
+      }
+
+    // Otherwise, always handle media removal so the UI can react (navigate back to a safe screen)
     if (current_screen == DGUSLCD_SCREEN_SDFILELIST
         || (current_screen == DGUSLCD_SCREEN_CONFIRM && (ConfirmVP == VP_SD_AbortPrintConfirmed || ConfirmVP == VP_SD_FileSelectConfirm))
         || current_screen == DGUSLCD_SCREEN_SDPRINTMANIPULATION
-    ) ScreenHandler.GotoScreen(DGUSLCD_SCREEN_MAIN, false);
+    ) {
+      ScreenHandler.GotoScreen(DGUSLCD_SCREEN_MAIN, false);
+      return;
+    }
+
+    // If a popup or confirm is currently visible (for example: a NOTICE
+    // informing the user that the SD card was removed), ensure the UI
+    // doesn't become stuck. Clear any pending ConfirmVP (to avoid stale
+    // callbacks) and pop the popup so the user can continue.
+    if (current_screen == DGUSLCD_SCREEN_POPUP || current_screen == DGUSLCD_SCREEN_CONFIRM) {
+      ConfirmVP = 0;
+      ScreenHandler.setstatusmessage("");
+      ScreenHandler.PopToOldScreen();
+      return;
+    }
   }
 
   void DGUSScreenHandler::SDCardMounted() {
     // Clear any previous SD card error message when card successfully mounts
     ScreenHandler.setstatusmessage("SD Card Ready");
+  }
+
+  void DGUSScreenHandler::sdReallyAbort(DGUS_VP_Variable &var, void *val_ptr) {
+    // Ensure any print state is stopped and present the Print Finished screen
+    ExtUI::stopPrint();
+    ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_FINISH, false);
   }
 
   void DGUSScreenHandler::SDCardError() {
@@ -790,8 +906,11 @@ void DGUSScreenHandler::DGUSLCD_SendHeaterStatusToDisplay(DGUS_VP_Variable &var)
 #endif // SDSUPPORT
 
 void DGUSScreenHandler::FilamentRunout() {
-  ScreenHandler.sendinfoscreen(PSTR("Load new"), PSTR("filament."), PSTR(" "), PSTR("Filament Runout"), true, true, true, true);
-  ScreenHandler.GotoScreen(DGUSLCD_SCREEN_POPUP);
+  // Provide a clearer, multi-line message that explains what will happen
+  // when filament runout is detected. These map to VP_MSGSTR1..3 and the
+  // title (VP_MSGSTR4) on the DGUS info popup.
+  ScreenHandler.sendinfoscreen(PSTR("Printer will:"), PSTR("1.Wait for heater"), PSTR("2.Park toolhead"), PSTR("No Filament!"), true, true, true, true);
+  ScreenHandler.GotoScreen(DGUSLCD_SCREEN_INFOBOX);
 
   // Audible alert: play a short series of beeps so user notices the runout.
   // Use the existing Buzzer() helper and safe_delay() to space beeps.
@@ -830,7 +949,7 @@ bool DGUSScreenHandler::HandlePendingUserConfirmation() {
 
   // Switch to the resume screen
   // Show host-specific running screen when appropriate
-  if (!ExtUI::isPrintingFromMedia()) ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING_HOST, false);
+  if (PrintSource::printingFromHost()) ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING_HOST, false);
   else ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING, false);
 
   // We might be re-entrant here
@@ -880,6 +999,18 @@ void DGUSScreenHandler::OnHomingComplete() {
   SERIAL_ECHOLNPGM("DGUSScreenHandler::OnHomingComplete called");
   SERIAL_ECHOLNPAIR(" current_screen=", ScreenHandler.getCurrentScreen());
   SERIAL_ECHOLNPAIR(" past_screens[0]=", ScreenHandler.past_screens[0]);
+  // If an SD-abort flow set the SuppressPopOnSyncOpCompletion flag then
+  // we've already navigated to Print Finished and must NOT pop back to the
+  // previous screen. In that case clear the suppression and go to Print
+  // Finished explicitly. Otherwise follow the normal flow.
+  if (ScreenHandler.SuppressPopOnSyncOpCompletion) {
+    SERIAL_ECHOLNPGM("DGUS: OnHomingComplete — suppression active, routing to Print Finished");
+    ScreenHandler.SuppressPopOnSyncOpCompletion = false;
+    ScreenHandler.SetSynchronousOperationFinish();
+    ScreenHandler.GotoScreen(DGUSLCD_SCREEN_PRINT_FINISH, false);
+    return;
+  }
+
   ScreenHandler.SetSynchronousOperationFinish();
   ScreenHandler.PopToOldScreen();
 }
@@ -917,7 +1048,22 @@ void DGUSScreenHandler::ScreenConfirmedOK(DGUS_VP_Variable &var, void *val_ptr) 
     if (ConfirmVP) {
       DGUS_VP_Variable ramcopy;
       if (populate_VPVar(ConfirmVP, &ramcopy) && ramcopy.set_by_display_handler) {
-        ramcopy.set_by_display_handler(ramcopy, val_ptr);
+        // Guard: when printing from Host, only run whitelisted handlers.
+        if (PrintSource::printingFromHost() && !handler_allowed_for_host(ConfirmVP)) {
+          // Special-case: if this ConfirmVP is the SD-abort confirm and the
+          // abort was triggered because the media was removed (or a pending
+          // start was queued), allow the handler to run so the SD abort
+          // action (sdReallyAbort) executes. Do NOT allow this when the
+          // printer is legitimately streaming from Host.
+          if (ConfirmVP == VP_SD_AbortPrintConfirmed && (card.flag.pending_print_start || card.isStillPrinting() || PrintSource::printingFromSDCard())) {
+            ramcopy.set_by_display_handler(ramcopy, val_ptr);
+          } else {
+            SERIAL_ECHOLNPGM("DGUS: Skipping set_by_display_handler for ConfirmVP during Host print:");
+            SERIAL_ECHOLNPAIR(" VP=", ConfirmVP);
+          }
+        } else {
+          ramcopy.set_by_display_handler(ramcopy, val_ptr);
+        }
       }
     }
 
@@ -925,9 +1071,20 @@ void DGUSScreenHandler::ScreenConfirmedOK(DGUS_VP_Variable &var, void *val_ptr) 
 #if ENABLED(ADVANCED_PAUSE_FEATURE)
       switch ((uint8_t)(button_value >> 8)) {
         case 0x01: // Continue / Resume
-          ExtUI::setPauseMenuResponse(PAUSE_RESPONSE_RESUME_PRINT);
+        case 0x02: // Some displays encode Continue as 0x02; accept both
+          // If the canonical PrintSource indicates a host-streamed job,
+          // invoke the host resume path directly. Otherwise use the
+          // pause-menu response path which resumes SD prints.
+          if (PrintSource::printingFromHost()) {
+            SERIAL_ECHOLNPGM("DGUS: popup Continue -> host resume (ExtUI::resumePrint)");
+            ExtUI::resumePrint();
+          } else {
+            SERIAL_ECHOLNPGM("DGUS: popup Continue -> SD resume (setPauseMenuResponse)");
+            ExtUI::setPauseMenuResponse(PAUSE_RESPONSE_RESUME_PRINT);
+          }
           break;
-        case 0x02: // Purge / Extrude more
+        case 0x03: // Purge / Extrude more (alternative encoding)
+        case 0x04:
           ExtUI::setPauseMenuResponse(PAUSE_RESPONSE_EXTRUDE_MORE);
           break;
         default:
@@ -936,21 +1093,36 @@ void DGUSScreenHandler::ScreenConfirmedOK(DGUS_VP_Variable &var, void *val_ptr) 
 #endif // ENABLED(ADVANCED_PAUSE_FEATURE)
     }
 
+    // Notify any connected host that the user responded (so the host UI
+    // can dismiss its prompt). Use a generic '1' response which HostUI
+    // treats as the primary/continue button in most cases.
+    if (ExtUI::awaitingUserConfirm() && PrintSource::printingFromHost()) {
+      // Only notify the host when the active print is a host-streamed job.
+      ExtUI::setHostResponse(1);
+    }
+
     ExtUI::setUserConfirmed();
     PopToOldScreen();
     return;
   }
 
   // The DGUS Confirm dialog uses different button encodings depending on
-  // the context. Empirically the SD file confirm uses: 1 = NO, 2 = YES.
+  // the context. For SD file confirm screen#66: 3 = NO, 2 = YES.
   // To avoid starting prints when the user pressed NO, ensure we only
   // forward the confirmation to the emulated VP when we see the expected
   // 'confirm' code for file confirms.
   if (ConfirmVP == VP_SD_FileSelectConfirm || ConfirmVP == VP_SD_AbortPrintConfirmed) {
-    if (button_value == 1) {
+    SERIAL_ECHOLNPAIR("[DEBUG] File confirm: ConfirmVP=0x", ConfirmVP);
+    SERIAL_ECHOLNPAIR("[DEBUG] File confirm: button_value=", button_value);
+    if (button_value == 3) {
       // NO response to Screen#66 "Confirm?"" questions -> go back to previous screen. Do NOT perform the YES action.
+      SERIAL_ECHOLNPGM("[DEBUG] File confirm: NO pressed - aborting print, returning to previous screen");
       PopToOldScreen();
       return;
+    } else if (button_value == 2) {
+      SERIAL_ECHOLNPGM("[DEBUG] File confirm: YES pressed - proceeding with print");
+    } else {
+      SERIAL_ECHOLNPAIR("[DEBUG] File confirm: Unknown button_value=", button_value, " - treating as YES");
     }
   }
 
@@ -972,8 +1144,8 @@ void DGUSScreenHandler::HandleM1125TimeoutConfirm(DGUS_VP_Variable &var, void *v
     SERIAL_ECHOLNPGM("M1125 Confirm handler: YES (0x0002) -> Continue action");
     M1125_TimeoutContinueAction();
   }
-  else if (raw == 0x0001) {
-    SERIAL_ECHOLNPGM("M1125 Confirm handler: NO (0x0001) -> no action (allow timeout)");
+  else if (raw == 0x0003) {
+    SERIAL_ECHOLNPGM("M1125 Confirm handler: NO (0x0003) -> no action (allow timeout)");
     // NO: intentionally do nothing here. Let the timeout elapse.
   }
 
@@ -1338,8 +1510,23 @@ void DGUSScreenHandler::ScreenChangeHook(DGUS_VP_Variable &var, void *val_ptr) {
       // emulation path the single canonical handler for Confirm returns.
       if (ConfirmVP) {
         DGUS_VP_Variable ramcopy;
-        if (populate_VPVar(ConfirmVP, &ramcopy) && ramcopy.set_by_display_handler) {
-          ramcopy.set_by_display_handler(ramcopy, val_ptr);
+          if (populate_VPVar(ConfirmVP, &ramcopy) && ramcopy.set_by_display_handler) {
+          // Guard handler invocation during Host prints unless whitelisted.
+          if (PrintSource::printingFromHost() && !handler_allowed_for_host(ConfirmVP)) {
+            // Special-case: if this ConfirmVP is the SD-abort confirm and the
+            // abort was triggered because the media was removed (or a pending
+            // start was queued), allow the handler to run so the SD abort
+            // action (sdReallyAbort) executes. Do NOT allow this when the
+            // printer is legitimately streaming from Host.
+            if (ConfirmVP == VP_SD_AbortPrintConfirmed && (card.flag.pending_print_start || card.isStillPrinting() || PrintSource::printingFromSDCard())) {
+              ramcopy.set_by_display_handler(ramcopy, val_ptr);
+            } else {
+              SERIAL_ECHOLNPGM("DGUS: Skipping set_by_display_handler for ConfirmVP during Host print:");
+              SERIAL_ECHOLNPAIR(" VP=", ConfirmVP);
+            }
+          } else {
+            ramcopy.set_by_display_handler(ramcopy, val_ptr);
+          }
         }
       }
 
@@ -1349,7 +1536,13 @@ void DGUSScreenHandler::ScreenChangeHook(DGUS_VP_Variable &var, void *val_ptr) {
 #if ENABLED(ADVANCED_PAUSE_FEATURE)
       switch (info) {
         case 0x01: // display encoded "Continue" action
-          ExtUI::setPauseMenuResponse(PAUSE_RESPONSE_RESUME_PRINT);
+          if (PrintSource::printingFromHost()) {
+            SERIAL_ECHOLNPGM("DGUS: ScreenChangeHook popup Continue -> host resume (ExtUI::resumePrint)");
+            ExtUI::resumePrint();
+          } else {
+            SERIAL_ECHOLNPGM("DGUS: ScreenChangeHook popup Continue -> SD resume (setPauseMenuResponse)");
+            ExtUI::setPauseMenuResponse(PAUSE_RESPONSE_RESUME_PRINT);
+          }
           break;
         case 0x02: // display encoded "Purge / Extrude more" action
           ExtUI::setPauseMenuResponse(PAUSE_RESPONSE_EXTRUDE_MORE);
@@ -1867,7 +2060,7 @@ void DGUSScreenHandler::PopToOldScreen() {
     if (ExtUI::isPrinting()) {
       // If printing from host (not from media), show the dedicated host
       // running screen so the UI clearly indicates a host-streamed job.
-      if (!ExtUI::isPrintingFromMedia()) GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING_HOST, false);
+      if (PrintSource::printingFromHost()) GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING_HOST, false);
       else GotoScreen(DGUSLCD_SCREEN_PRINT_RUNNING, false);
     } else {
       GotoScreen(DGUSLCD_SCREEN_MAIN, false);
@@ -2071,8 +2264,18 @@ bool DGUSScreenHandler::loop() {
     m1125_pause_start_ms = 0;
     m1125_next_countdown_update = 0;
     m1125_pause_was_active = false;
-    // Only clear if there's no delayed status that should take precedence
-    if (!delayed_status_until) ScreenHandler.setstatusmessage("");
+    // Clear any countdown/status we may have set when pause ends.
+    // Previously this only cleared the visible status if there was no
+    // pending delayed status. That allowed the "Heaters timeout in ..."
+    // message to remain visible after resume if delayed_status_until was
+    // set by other logic. Unconditionally clear the delayed-status state
+    // and the status line to ensure the heater-timeout countdown doesn't
+    // persist after the printer leaves the paused state.
+    delayed_status_until = 0;
+    delayed_status_clear_at = 0;
+    delayed_status_buffer[0] = '\0';
+    delayed_status_in_flash = false;
+    ScreenHandler.setstatusmessage("");
   }
 
   // While paused, maybe show the countdown after the initial 10s hold
