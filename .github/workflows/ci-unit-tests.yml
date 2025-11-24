@@ -9,8 +9,7 @@ on:
   pull_request:
     branches:
     - bugfix-2.1.x
-    # Cannot be enabled on 2.1.x until it contains the unit test framework
-    #- 2.1.x
+    - main
     paths-ignore:
     - config/**
     - data/**
@@ -19,8 +18,7 @@ on:
   push:
     branches:
     - bugfix-2.1.x
-    # Cannot be enabled on 2.1.x until it contains the unit test framework
-    #- 2.1.x
+    - main
     paths-ignore:
     - config/**
     - data/**
@@ -32,10 +30,6 @@ jobs:
   # multiple jobs, they currently run quickly and finish long before the compilation tests.
   run_unit_tests:
     name: Unit Test
-    # These tests will only be able to run on the bugfix-2.1.x branch, until the next release
-    # pulls them into additional branches.
-    if: github.repository == 'MarlinFirmware/Marlin'
-
     runs-on: ubuntu-22.04
 
     steps:
