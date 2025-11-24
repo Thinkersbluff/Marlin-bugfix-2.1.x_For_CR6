@@ -1,5 +1,5 @@
 # The Marlin used for this custom CR6 Community Firmware upgrade was snapshot from Marlin_2.1.x_bugfix in October 2025.
-# It has also since been modified to integrate with the CR6 Community ReFactored Display Firmware, which was itself also modified.
+# It has since been modified to integrate with the CR6 Community ReFactored Display Firmware, which was itself also modified.
 # You are most welcome to experiment with this firmware suite, but understand it is entirely at your own risk.
 
 
