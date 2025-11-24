@@ -1,4 +1,11 @@
+# The Marlin used for this custom CR6 Community Firmware upgrade was snapshot from Marlin_2.1.x_bugfix in October 2025.
+# It has also since been modified to integrate with the CR6 Community ReFactored Display Firmware, which was itself also modified.
+# You are most welcome to experiment with this firmware suite, but understand it is entirely at your own risk.
 
+
+
+
+Below this line is the actual README snapshot from the MARLIN3D.org site from which this copy was forked:
 __________________________________________________________________________________________________________________________________
 <p align="center"><img src="buildroot/share/pixmaps/logo/marlin-outrun-nf-500.png" height="250" alt="MarlinFirmware's logo" /></p>
 
