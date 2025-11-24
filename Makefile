@@ -82,7 +82,7 @@ unit-test-single-local-docker:
 	$(CONTAINER_RT_BIN) run $(CONTAINER_RT_OPTS)  $(CONTAINER_IMAGE) make unit-test-single-local UNIT_TEST_CONFIG=$(UNIT_TEST_CONFIG)
 
 unit-test-all-local:
-	platformio run -t test-marlin -e linux_native_test
+	platformio test -e linux_native_test
 
 unit-test-all-local-docker:
 	@if ! $(CONTAINER_RT_BIN) images -q $(CONTAINER_IMAGE) > /dev/null ; then $(MAKE) setup-local-docker ; fi
