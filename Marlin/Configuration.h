@@ -1695,11 +1695,11 @@
  * A switch indicating proper deployment, or an optical
  * switch triggered when the carriage is near the bed.
  */
-// Not needed for CR-6 SE nozzle-as-probe - this was causing probe failures
-// #define PROBE_ACTIVATION_SWITCH
+// CR-6 SE optical sensor on PB2 - prevents false triggers during travel
+#define PROBE_ACTIVATION_SWITCH
 #if ENABLED(PROBE_ACTIVATION_SWITCH)
   #define PROBE_ACTIVATION_SWITCH_STATE LOW // State indicating probe is active
-  // #define PROBE_ACTIVATION_SWITCH_PIN PB2 // Override default pin
+  #define PROBE_ACTIVATION_SWITCH_PIN PB2 // Default from pins file
 #endif
 
 /**
@@ -1709,13 +1709,13 @@
  */
 #define PROBE_TARE
 #if ENABLED(PROBE_TARE)
-  #define PROBE_TARE_TIME  250    // (ms) Time to hold tare pin
-  #define PROBE_TARE_DELAY 250    // (ms) Delay after tare before
+  #define PROBE_TARE_TIME  300    // (ms) Time to hold tare pin
+  #define PROBE_TARE_DELAY 500    // (ms) Delay after tare before
   #define PROBE_TARE_STATE HIGH   // State to write pin for tare
   //#define PROBE_TARE_PIN PA5    // Override default pin
   //#define PROBE_TARE_MENU       // Display a menu item to tare the probe
   #if ENABLED(PROBE_ACTIVATION_SWITCH)
-    //#define PROBE_TARE_ONLY_WHILE_INACTIVE  // Fail to tare/probe if PROBE_ACTIVATION_SWITCH is active
+    #define PROBE_TARE_ONLY_WHILE_INACTIVE  // Fail to tare/probe if PROBE_ACTIVATION_SWITCH is active
   #endif
 #endif
 
@@ -1723,7 +1723,8 @@
  * Probe Enable / Disable
  * The probe only provides a triggered signal when enabled.
  */
-// #define PROBE_ENABLE_DISABLE
+// CR-6 SE uses PROBE_ACTIVATION_SWITCH instead
+//#define PROBE_ENABLE_DISABLE
 #if ENABLED(PROBE_ENABLE_DISABLE)
   //#define PROBE_ENABLE_PIN -1   // Override the default pin here
 #endif
@@ -1794,7 +1795,7 @@
 //#define PROBING_FANS_OFF          // Turn fans off when probing
 //#define PROBING_ESTEPPERS_OFF     // Turn all extruder steppers off when probing
 //#define PROBING_STEPPERS_OFF      // Turn all steppers off (unless needed to hold position) when probing (including extruders)
-#define DELAY_BEFORE_PROBING 200  // (ms) To prevent vibrations from triggering piezo sensors
+#define DELAY_BEFORE_PROBING 500  // (ms) To prevent vibrations from triggering piezo sensors
 
 // Require minimum nozzle and/or bed temperature for probing
 //#define PREHEAT_BEFORE_PROBING
