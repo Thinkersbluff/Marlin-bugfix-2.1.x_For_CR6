@@ -871,7 +871,8 @@ void GcodeSuite::process_parsed_command(bool no_ok/*=false*/) {
       #if HAS_BED_PROBE
         case 401: M401(); break;                                  // M401: Deploy probe
         case 402: M402(); break;                                  // M402: Stow probe
-      #endif
+        case 905: M905(); break;                                  // M905: Calibrate probe enable-off height
+        #endif
 
       #if HAS_PRUSA_MMU2 || HAS_PRUSA_MMU3
         case 403: M403(); break;

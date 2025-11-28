@@ -77,6 +77,12 @@ bool Endstops::enabled, Endstops::enabled_globally; // Initialized by settings.l
 volatile Endstops::endstop_mask_t Endstops::hit_state;
 Endstops::endstop_mask_t Endstops::live_state = 0;
 
+// Definitions for trigger log ring buffer declared in endstops.h
+volatile Endstops::trigger_entry_t Endstops::trigger_log[16];
+volatile uint8_t Endstops::trigger_log_head = 0;
+volatile uint8_t Endstops::trigger_log_tail = 0;
+volatile uint32_t Endstops::trigger_log_seq = 0;
+
 #if ENABLED(BD_SENSOR)
   bool Endstops::bdp_state; // = false
   #if HOMING_Z_WITH_PROBE
@@ -565,10 +571,149 @@ void __O2 Endstops::report_states() {
     print_es_state(!FILAMENT_IS_OUT(), F(STR_FILAMENT));
   #endif
 
+  // Additional diagnostics: show stepper enabled states and raw probe pin reads
+  SERIAL_ECHOLNPGM("Stepper enabled states:");
+  #if HAS_X_AXIS
+    SERIAL_ECHO(" X: "); SERIAL_ECHOLN(stepper.axis_is_enabled(X_AXIS) ? F("ENABLED") : F("DISABLED"));
+  #endif
+  #if HAS_Y_AXIS
+    SERIAL_ECHO(" Y: "); SERIAL_ECHOLN(stepper.axis_is_enabled(Y_AXIS) ? F("ENABLED") : F("DISABLED"));
+  #endif
+  #if HAS_Z_AXIS
+    SERIAL_ECHO(" Z: "); SERIAL_ECHOLN(stepper.axis_is_enabled(Z_AXIS) ? F("ENABLED") : F("DISABLED"));
+  #endif
+
+  #if ENABLED(PROBE_ACTIVATION_SWITCH)
+    SERIAL_ECHO("Probe activation raw: ");
+    SERIAL_ECHOLN( READ_ENDSTOP(PROBE_ACTIVATION_SWITCH_PIN) ? F("HIGH") : F("LOW") );
+  #endif
+  #if USE_Z_MIN_PROBE
+    SERIAL_ECHO("Z probe raw: ");
+    SERIAL_ECHOLN( READ_ENDSTOP(Z_MIN_PROBE_PIN) ? F("HIGH") : F("LOW") );
+  #endif
+
+  // If we recorded any trigger events in interrupt context, show them here
+  dump_trigger_log();
+
   TERN_(BLTOUCH, bltouch._reset_SW_mode());
   TERN_(JOYSTICK_DEBUG, joystick.report());
 
 } // Endstops::report_states
+
+// Dump recorded trigger events (non-ISR context). Consumes the buffer.
+void Endstops::dump_trigger_log() {
+  SERIAL_ECHOLNPGM("Trigger log:");
+  // Helper to map bit index to a human readable label
+  auto es_name = [](const uint8_t bit)->const char* {
+    switch (bit) {
+      #if HAS_X_MIN_STATE
+      case ES_ENUM(X,MIN): return "X_MIN";
+      #endif
+      #if HAS_X_MAX_STATE
+      case ES_ENUM(X,MAX): return "X_MAX";
+      #endif
+      #if HAS_Y_MIN_STATE
+      case ES_ENUM(Y,MIN): return "Y_MIN";
+      #endif
+      #if HAS_Y_MAX_STATE
+      case ES_ENUM(Y,MAX): return "Y_MAX";
+      #endif
+      #if HAS_Z_MIN_STATE
+      case ES_ENUM(Z,MIN): return "Z_MIN";
+      #endif
+      #if HAS_Z_MAX_STATE
+      case ES_ENUM(Z,MAX): return "Z_MAX";
+      #endif
+      #if USE_Z_MIN_PROBE
+      case ES_ENUM(Z,MIN_PROBE): return "Z_MIN_PROBE";
+      #endif
+      #if HAS_X2_MIN_STATE
+      case ES_ENUM(X2,MIN): return "X2_MIN";
+      #endif
+      #if HAS_X2_MAX_STATE
+      case ES_ENUM(X2,MAX): return "X2_MAX";
+      #endif
+      #if HAS_Y2_MIN_STATE
+      case ES_ENUM(Y2,MIN): return "Y2_MIN";
+      #endif
+      #if HAS_Y2_MAX_STATE
+      case ES_ENUM(Y2,MAX): return "Y2_MAX";
+      #endif
+      #if HAS_Z2_MIN_STATE
+      case ES_ENUM(Z2,MIN): return "Z2_MIN";
+      #endif
+      #if HAS_Z2_MAX_STATE
+      case ES_ENUM(Z2,MAX): return "Z2_MAX";
+      #endif
+      #if HAS_Z3_MIN_STATE
+      case ES_ENUM(Z3,MIN): return "Z3_MIN";
+      #endif
+      #if HAS_Z3_MAX_STATE
+      case ES_ENUM(Z3,MAX): return "Z3_MAX";
+      #endif
+      #if HAS_Z4_MIN_STATE
+      case ES_ENUM(Z4,MIN): return "Z4_MIN";
+      #endif
+      #if HAS_Z4_MAX_STATE
+      case ES_ENUM(Z4,MAX): return "Z4_MAX";
+      #endif
+      #if HAS_I_MIN_STATE
+      case ES_ENUM(I,MIN): return "I_MIN";
+      #endif
+      #if HAS_I_MAX_STATE
+      case ES_ENUM(I,MAX): return "I_MAX";
+      #endif
+      #if HAS_J_MIN_STATE
+      case ES_ENUM(J,MIN): return "J_MIN";
+      #endif
+      #if HAS_J_MAX_STATE
+      case ES_ENUM(J,MAX): return "J_MAX";
+      #endif
+      #if HAS_K_MIN_STATE
+      case ES_ENUM(K,MIN): return "K_MIN";
+      #endif
+      #if HAS_K_MAX_STATE
+      case ES_ENUM(K,MAX): return "K_MAX";
+      #endif
+      default: return "UNKNOWN";
+    }
+  };
+  uint8_t t = trigger_log_tail;
+  const uint8_t h = trigger_log_head;
+  while (t != h) {
+    // Copy volatile entry fields individually to avoid volatile->nonvolatile binding issues
+    Endstops::trigger_entry_t e;
+    e.state = trigger_log[t].state;
+    e.bit_index = trigger_log[t].bit_index;
+    e.seq = trigger_log[t].seq;
+    e.ts = trigger_log[t].ts;
+    SERIAL_ECHO(" seq:"); SERIAL_ECHO((unsigned long)e.seq);
+    SERIAL_ECHO(" ms:"); SERIAL_ECHO((unsigned long)e.ts);
+    SERIAL_ECHO(" bit:"); SERIAL_ECHO((int)e.bit_index);
+    SERIAL_ECHO(" ("); SERIAL_ECHO(es_name(e.bit_index)); SERIAL_ECHO(")");
+    SERIAL_ECHO(" state:"); SERIAL_ECHOLN((unsigned long)e.state);
+    t = (t + 1) & 0x0F;
+  }
+  // Mark consumed
+  trigger_log_tail = h;
+}
+
+// Public API: peek the circular buffer bounds (non-destructive)
+void Endstops::peek_trigger_log_bounds(uint8_t &head, uint8_t &tail) {
+  head = trigger_log_head;
+  tail = trigger_log_tail;
+}
+
+// Public API: peek an entry from the trigger_log by raw index (non-destructive)
+Endstops::trigger_entry_public_t Endstops::peek_trigger_log_entry(uint8_t idx) {
+  Endstops::trigger_entry_public_t out;
+  // Copy volatile entry fields individually to avoid volatile->nonvolatile binding issues
+  out.state = trigger_log[idx].state;
+  out.bit_index = trigger_log[idx].bit_index;
+  out.seq = trigger_log[idx].seq;
+  out.ts = trigger_log[idx].ts;
+  return out;
+}
 
 /**
  * Called from interrupt context by the Endstop ISR or Stepper ISR!
@@ -788,10 +933,23 @@ void Endstops::update() {
   // Record endstop was hit
   #define _ENDSTOP_HIT(AXIS, MINMAX) SBI(hit_state, ES_ENUM(AXIS, MINMAX))
 
+  // Record a trigger event into the small ISR-safe ring buffer.
+  // Keep this very small and lock-free for use from interrupt context.
+  #define RECORD_TRIGGER(ESBIT) do { \
+    const uint8_t _h = trigger_log_head; \
+    trigger_log[_h].state = live_state; \
+    trigger_log[_h].bit_index = ESBIT; \
+    trigger_log[_h].seq = ++trigger_log_seq; \
+    trigger_log[_h].ts = (uint32_t)millis(); \
+    trigger_log_head = (_h + 1) & 0x0F; \
+    if (trigger_log_head == trigger_log_tail) trigger_log_tail = (trigger_log_tail + 1) & 0x0F; \
+  } while(0)
+
   // Call the endstop triggered routine for single endstops
   #define PROCESS_ENDSTOP(AXIS, MINMAX) do { \
     if (TEST_ENDSTOP(ES_ENUM(AXIS, MINMAX))) { \
       _ENDSTOP_HIT(AXIS, MINMAX); \
+      RECORD_TRIGGER(ES_ENUM(AXIS, MINMAX)); \
       planner.endstop_triggered(_AXIS(AXIS)); \
     } \
   }while(0)

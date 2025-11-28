@@ -135,8 +135,25 @@ enum EndstopEnum : int8_t {
 
 class Endstops {
   public:
+    
+
 
     typedef bits_t(NUM_ENDSTOP_STATES) endstop_mask_t;
+
+    // Public view of a trigger-log entry for diagnostic peeks (non-destructive)
+    typedef struct {
+      uint32_t seq;
+      uint32_t ts;
+      uint8_t bit_index;
+      endstop_mask_t state;
+    } trigger_entry_public_t;
+
+    // Peek the circular buffer bounds (head and tail). Non-destructive.
+    static void peek_trigger_log_bounds(uint8_t &head, uint8_t &tail);
+
+    // Read a single trigger-log entry by index (non-destructive). The index
+    // is the raw buffer index (0..15) and must be obtained via peek_trigger_log_bounds.
+    static trigger_entry_public_t peek_trigger_log_entry(uint8_t idx);
 
     #if ENABLED(X_DUAL_ENDSTOPS)
       static float x2_endstop_adj;
@@ -163,6 +180,18 @@ class Endstops {
       static endstop_mask_t validated_live_state;
       static uint8_t endstop_poll_count;    // Countdown from threshold for polling
     #endif
+
+    // Ring buffer to record trigger events from ISR context. Kept small to be safe in ISR.
+    typedef struct {
+      endstop_mask_t state;
+      uint8_t bit_index; // ES_ENUM value
+      uint32_t seq;
+      uint32_t ts; // timestamp in ms when recorded
+    } trigger_entry_t;
+    static volatile trigger_entry_t trigger_log[16];
+    static volatile uint8_t trigger_log_head;
+    static volatile uint8_t trigger_log_tail;
+    static volatile uint32_t trigger_log_seq;
 
   public:
     Endstops() {};
@@ -238,6 +267,9 @@ class Endstops {
      * Report endstop states in response to M119
      */
     static void report_states();
+
+    // Diagnostic: dump recorded trigger events (recorded from update() when a trigger was latched)
+    static void dump_trigger_log();
 
     // Enable / disable endstop checking globally
     static void enable_globally(const bool onoff=true);

@@ -1244,11 +1244,11 @@
  * Set to the state (HIGH or LOW) that applies to each endstop.
  */
 #define X_MIN_ENDSTOP_HIT_STATE HIGH
-#define X_MAX_ENDSTOP_HIT_STATE HIGH
+//#define X_MAX_ENDSTOP_HIT_STATE HIGH
 #define Y_MIN_ENDSTOP_HIT_STATE HIGH
-#define Y_MAX_ENDSTOP_HIT_STATE HIGH
+//#define Y_MAX_ENDSTOP_HIT_STATE HIGH
 #define Z_MIN_ENDSTOP_HIT_STATE HIGH
-#define Z_MAX_ENDSTOP_HIT_STATE HIGH
+//#define Z_MAX_ENDSTOP_HIT_STATE HIGH
 #define I_MIN_ENDSTOP_HIT_STATE HIGH
 #define I_MAX_ENDSTOP_HIT_STATE HIGH
 #define J_MIN_ENDSTOP_HIT_STATE HIGH
@@ -1279,10 +1279,10 @@
  *
  * :[2,3,4,5,6,7]
  */
-//#define ENDSTOP_NOISE_THRESHOLD 2
+#define ENDSTOP_NOISE_THRESHOLD 3 // (number of consecutive readings @1kHz)
 
 // Check for stuck or disconnected endstops during homing moves.
-//#define DETECT_BROKEN_ENDSTOP
+#define DETECT_BROKEN_ENDSTOP
 
 //=============================================================================
 //============================== Movement Settings ============================
@@ -1685,7 +1685,7 @@
 #define XY_PROBE_FEEDRATE    (133*60) // (mm/min)
 
 // Feedrate for the first approach when double-probing (MULTIPLE_PROBING == 2)
-#define Z_PROBE_FEEDRATE_FAST  (4*60) // (mm/min)
+#define Z_PROBE_FEEDRATE_FAST  (10*60) // (mm/min)
 
 // Feedrate for the "accurate" probe of each point
 #define Z_PROBE_FEEDRATE_SLOW (Z_PROBE_FEEDRATE_FAST / 2) // (mm/min)
@@ -1700,6 +1700,9 @@
 #if ENABLED(PROBE_ACTIVATION_SWITCH)
   #define PROBE_ACTIVATION_SWITCH_STATE LOW // State indicating probe is active
   #define PROBE_ACTIVATION_SWITCH_PIN PB2 // Default from pins file
+  #define PROBE_EN_OFF_HEIGHT_DEFAULT 15 // (mm) default value for the M905 calibration 'a' parameter
+  #define PROBE_EN_OFF_MARGIN 1 // (mm)
+  #define M905_STEP_SETTLE_MS 50
 #endif
 
 /**
@@ -1709,10 +1712,10 @@
  */
 #define PROBE_TARE
 #if ENABLED(PROBE_TARE)
-  #define PROBE_TARE_TIME  300    // (ms) Time to hold tare pin
-  #define PROBE_TARE_DELAY 500    // (ms) Delay after tare before
+  #define PROBE_TARE_TIME  100    // (ms) Time to hold tare pin
+  #define PROBE_TARE_DELAY 50    // (ms) Delay after tare before probing
   #define PROBE_TARE_STATE HIGH   // State to write pin for tare
-  //#define PROBE_TARE_PIN PA5    // Override default pin
+  #define PROBE_TARE_PIN PA5    // Override default pin
   //#define PROBE_TARE_MENU       // Display a menu item to tare the probe
   #if ENABLED(PROBE_ACTIVATION_SWITCH)
     #define PROBE_TARE_ONLY_WHILE_INACTIVE  // Fail to tare/probe if PROBE_ACTIVATION_SWITCH is active
@@ -1759,9 +1762,13 @@
 #define Z_CLEARANCE_BETWEEN_PROBES  3 // (mm) Z Clearance between probe points
 #define Z_CLEARANCE_MULTI_PROBE     2 // (mm) Z Clearance between multiple probes
 #define Z_PROBE_ERROR_TOLERANCE     3 // (mm) Tolerance for early trigger (<= -probe.offset.z + ZPET)
-//#define Z_AFTER_PROBING           5 // (mm) Z position after probing is done
+#define Z_AFTER_PROBING           5 // (mm) Z position after probing is done
 
-#define Z_PROBE_LOW_POINT          -2 // (mm) Farthest distance below the trigger-point to go before stopping
+#define Z_PROBE_LOW_POINT          -1 // (mm) Farthest distance below the trigger-point to go before stopping
+
+// Default calibrated probe enable-off height
+// (mm) Used as the default value for the M905 calibration 'a' parameter
+// NOTE: Defined inside the PROBE_ACTIVATION_SWITCH section above.
 
 // For M851 provide ranges for adjusting the X, Y, and Z probe offsets
 //#define PROBE_OFFSET_XMIN -50   // (mm)
@@ -1795,7 +1802,7 @@
 //#define PROBING_FANS_OFF          // Turn fans off when probing
 //#define PROBING_ESTEPPERS_OFF     // Turn all extruder steppers off when probing
 //#define PROBING_STEPPERS_OFF      // Turn all steppers off (unless needed to hold position) when probing (including extruders)
-#define DELAY_BEFORE_PROBING 500  // (ms) To prevent vibrations from triggering piezo sensors
+#define DELAY_BEFORE_PROBING 50  // (ms) To prevent vibrations from triggering piezo sensors
 
 // Require minimum nozzle and/or bed temperature for probing
 //#define PREHEAT_BEFORE_PROBING

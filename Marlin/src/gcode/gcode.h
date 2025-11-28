@@ -1052,6 +1052,7 @@ private:
     static void M401();
     static void M401_report(const bool forReplay=true);
     static void M402();
+    static void M905();
   #endif
 
   #if HAS_PRUSA_MMU2 || HAS_PRUSA_MMU3

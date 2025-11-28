@@ -388,6 +388,10 @@ bool hasPrintTimer = false;
     // There is no explicit OnMeshLevelingFinish() in the handler; use the
     // existing logic that finishes when the last point is captured. If the
     // handler needs an explicit finish action, PopToOldScreen() is safe here.
+    // Ensure any DGUS synchronous operation started by OnMeshLevelingStart()
+    // is finished so the UI back/pop controls are re-enabled even when
+    // leveling ends due to error or early abort.
+    ScreenHandler.SetSynchronousOperationFinish();
     ScreenHandler.PopToOldScreen();
   }
 

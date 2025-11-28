@@ -39,6 +39,7 @@
 #include "../lcd/marlinui.h"
 
 #include "../MarlinCore.h" // for stop(), disable_e_steppers(), wait_for_user_response()
+#include "settings.h"
 
 #if HAS_LEVELING
   #include "../feature/bedlevel/bedlevel.h"
@@ -100,6 +101,32 @@
 
 #define DEBUG_OUT ENABLED(DEBUG_LEVELING_FEATURE)
 #include "../core/debug_out.h"
+
+// Helper to stringify a macro token (keeps the token name readable in logs)
+#ifndef PROBE_STR
+#define _PROBE_STR(x) #x
+#define PROBE_STR(x) _PROBE_STR(x)
+#endif
+// Configurable debounce for transient probe triggers (milliseconds)
+// Lowered to 6 ms to filter short ISR-latched transients seen on some boards
+#ifndef PROBE_DEBOUNCE_MS
+#define PROBE_DEBOUNCE_MS 6
+#endif
+
+// Compute a safe clearance height for probing/tare flows. If a calibrated
+// enable-off height is stored, use that + stored margin when it is larger
+// than the requested clearance. Otherwise return the requested clearance.
+static float probe_safe_clearance_for_z(const float requested_clearance) {
+  #if ENABLED(PROBE_ACTIVATION_SWITCH)
+    const float penh = MarlinSettings::get_probe_en_off_height();
+    if (penh > 0.0f) {
+      const float margin = MarlinSettings::get_probe_en_off_margin();
+      const float safe = penh + margin;
+      return (requested_clearance < safe) ? safe : requested_clearance;
+    }
+  #endif
+  return requested_clearance;
+}
 
 Probe probe;
 
@@ -524,6 +551,8 @@ void Probe::probe_error_stop() {
     SERIAL_ECHOPGM(STR_STOP_BLTOUCH);
   #endif
   SERIAL_ECHOLNPGM(STR_STOP_POST);
+  // Clear any modal 'wait for user' so the UI isn't left unresponsive.
+  TERN_(HAS_RESUME_CONTINUE, wait_for_user = false);
   stop();
 }
 
@@ -660,12 +689,186 @@ bool Probe::probe_down_to_z(const float z, const feedRate_t fr_mm_s) {
   #endif // SENSORLESS_PROBING
 
   TERN_(HAS_QUIET_PROBING, set_probing_paused(true));
-
+  // Enable endstops so the blocking move can be aborted by ISR on trigger
+  endstops.enable(true);
   // Move down until the probe is triggered
-  do_blocking_move_to_z(z, fr_mm_s);
+  // Capture activation switch state before descent for debugging
+  bool activation_before = endstops.probe_switch_activated();
 
-  // Check to see if the probe was triggered
-  const bool probe_triggered = (
+  // Always-on debug: report intended descent target and feedrate
+  SERIAL_ECHOLNPGM("DBG_PROBE: descending to Z:", z, " fr_mm_s:", fr_mm_s);
+  // If detailed leveling debug is enabled, sample for a short window BEFORE the blocking Z move
+  // so we can compare baseline behavior prior to motion (helps compare G28 vs G30).
+  #if ENABLED(DEBUG_LEVELING_FEATURE)
+    const uint32_t dbg_t_pre_start = millis();
+    SERIAL_ECHOLNPGM("DBG_PROBE: pre-blocking sampling start (ms, z_raw, act_raw, trigger_state)");
+    for (uint8_t _ps = 0; _ps < 30; ++_ps) { // ~30 ms pre-samples at 1 ms interval
+      const bool z_raw_ps =
+        #if USE_Z_MIN_PROBE
+          READ(Z_MIN_PROBE_PIN)
+        #else
+          false
+        #endif
+      ;
+      const bool act_raw_ps =
+        #if ENABLED(PROBE_ACTIVATION_SWITCH)
+          READ(PROBE_ACTIVATION_SWITCH_PIN)
+        #else
+          false
+        #endif
+      ;
+      const bool z_min_pin_ps =
+        #if USE_Z_MIN
+          READ(Z_MIN_PIN)
+        #else
+          false
+        #endif
+      ;
+      SERIAL_ECHOLNPGM("DBG_PROBE: pre t:", int(_ps), " z_raw:", z_raw_ps ? 1 : 0, " act_raw:", act_raw_ps ? 1 : 0, " z_min:", z_min_pin_ps ? 1 : 0, " trigger_state:", int(endstops.trigger_state()));
+      safe_delay(1);
+    }
+    const uint32_t dbg_t_pre_end = millis();
+    SERIAL_ECHOLNPGM("DBG_PROBE: pre-blocking sampling end");
+  #endif
+
+  // Conservative pre-descent clear: Only clear a previously-latched trigger
+  // when the latched bits include Z (Z_MIN or Z_MIN_PROBE) AND the probe
+  // activation switch was inactive at arrival.  Use a longer sampling window
+  // (~30ms) to catch very short transients that the endstops ISR may have
+  // latched during prior motion. Non-Z latched bits are left alone.
+  {
+    const auto latched = endstops.trigger_state();
+    const bool latched_z = (
+      #if USE_Z_MIN_PROBE
+        TEST(latched, Z_MIN_PROBE) ||
+      #endif
+      #if USE_Z_MIN
+        TEST(latched, Z_MIN)
+      #else
+        false
+      #endif
+    );
+
+    if (latched && !activation_before) {
+      if (!latched_z) {
+        SERIAL_ECHOLNPGM("DBG_PROBE: Latched non-Z endstop (not cleared): trigger_state:", int(latched));
+      }
+      else {
+        const uint8_t SAMPLES = 30; // ~30 ms total sampling to catch short transients
+        bool any_raw = false;
+        for (uint8_t i = 0; i < SAMPLES; ++i) {
+          const bool z_raw_chk =
+            #if USE_Z_MIN_PROBE
+              READ(Z_MIN_PROBE_PIN)
+            #else
+              false
+            #endif
+          ;
+          const bool act_raw_chk =
+            #if ENABLED(PROBE_ACTIVATION_SWITCH)
+              READ(PROBE_ACTIVATION_SWITCH_PIN)
+            #else
+              false
+            #endif
+          ;
+          const bool z_min_chk =
+            #if USE_Z_MIN
+              READ(Z_MIN_PIN)
+            #else
+              false
+            #endif
+          ;
+          if (z_raw_chk || act_raw_chk || z_min_chk) { any_raw = true; break; }
+          safe_delay(1);
+        }
+        if (!any_raw) {
+          SERIAL_ECHOLNPGM("DBG_PROBE: Clearing previously-latched Z trigger (probe inactive, pre-samples clear)");
+          endstops.hit_on_purpose();
+        }
+        else SERIAL_ECHOLNPGM("DBG_PROBE: Did not clear latched Z trigger - pre-samples show raw active");
+      }
+    }
+  }
+
+  // Snapshot head index so we can later check for ISR-triggered entries
+  uint8_t dbg_trigger_head_before = 0, dbg_trigger_tail_before = 0;
+  Endstops::peek_trigger_log_bounds(dbg_trigger_head_before, dbg_trigger_tail_before);
+  do_blocking_move_to_z(z, fr_mm_s);
+  const uint32_t dbg_t_post_blocking = millis();
+  SERIAL_ECHOLNPGM("DBG_PROBE: blocking Z move returned");
+
+  // Compact timing comparison: show pre/post sample times and any ISR trigger entries
+  #if ENABLED(DEBUG_LEVELING_FEATURE)
+    uint8_t dbg_trigger_head_after = 0, dbg_trigger_tail_after = 0;
+    Endstops::peek_trigger_log_bounds(dbg_trigger_head_after, dbg_trigger_tail_after);
+    // Use a single formatted line to print numeric timing fields reliably
+    SERIAL_ECHOLNPGM("TSCMP: pre_start:", (unsigned long)dbg_t_pre_start,
+                     " pre_end:", (unsigned long)dbg_t_pre_end,
+                     " post_blocking:", (unsigned long)dbg_t_post_blocking,
+                     " head_before:", int(dbg_trigger_head_before),
+                     " head_after:", int(dbg_trigger_head_after));
+
+    // Print any ISR trigger entries recorded between the two heads (non-destructive)
+    if (dbg_trigger_head_before != dbg_trigger_head_after) {
+      SERIAL_ECHOLNPGM("TSCMP: ISR entries:");
+      uint8_t _idx = dbg_trigger_head_before;
+      while (_idx != dbg_trigger_head_after) {
+        const auto e = Endstops::peek_trigger_log_entry(_idx);
+        SERIAL_ECHOLNPGM("  seq:", (unsigned long)e.seq,
+                         " ms:", (unsigned long)e.ts,
+                         " bit:", (int)e.bit_index,
+                         " state:", (unsigned long)e.state);
+        _idx = (_idx + 1) & 0x0F;
+      }
+    }
+    else SERIAL_ECHOLNPGM("TSCMP: ISR entries: <none>");
+  #endif
+
+  // Diagnostic: report raw endstop/probe pin states immediately after blocking move returns
+  SERIAL_ECHOLNPGM("DBG_PROBE: post-blocking M119 snapshot");
+  endstops.report_states();
+
+  // Print compiled pin token and numeric value for the Z probe (helps confirm pin mapping)
+  #if USE_Z_MIN_PROBE
+    SERIAL_ECHOLNPGM("DBG_PROBE: Z probe macro:", PROBE_STR(Z_MIN_PROBE_PIN), " value:", int(Z_MIN_PROBE_PIN));
+  #else
+    SERIAL_ECHOLNPGM("DBG_PROBE: Z probe macro: <none>");
+  #endif
+
+  // If detailed leveling debug is enabled, sample raw probe/activation pins
+  // at 1ms intervals for a short window to capture transient behavior after the blocking move.
+  #if ENABLED(DEBUG_LEVELING_FEATURE)
+    SERIAL_ECHOLNPGM("DBG_PROBE: post-blocking detailed sampling start (ms, z_raw, act_raw, trigger_state)");
+    for (uint8_t _s = 0; _s < 30; ++_s) { // sample for ~30 ms
+      const bool z_raw =
+        #if USE_Z_MIN_PROBE
+          READ(Z_MIN_PROBE_PIN)
+        #else
+          false
+        #endif
+      ;
+      const bool act_raw =
+        #if ENABLED(PROBE_ACTIVATION_SWITCH)
+          READ(PROBE_ACTIVATION_SWITCH_PIN)
+        #else
+          false
+        #endif
+      ;
+      const bool z_min_pin =
+        #if USE_Z_MIN
+          READ(Z_MIN_PIN)
+        #else
+          false
+        #endif
+      ;
+      SERIAL_ECHOLNPGM("DBG_PROBE: post t:", int(_s), " z_raw:", z_raw ? 1 : 0, " act_raw:", act_raw ? 1 : 0, " z_min:", z_min_pin ? 1 : 0, " trigger_state:", int(endstops.trigger_state()));
+      safe_delay(1);
+    }
+    SERIAL_ECHOLNPGM("DBG_PROBE: post-blocking detailed sampling end");
+  #endif
+
+  // Check to see if the probe was triggered (with a short transient re-check)
+  bool probe_triggered = (
     #if HAS_DELTA_SENSORLESS_PROBING
       endstops.trigger_state() & (_BV(X_MAX) | _BV(Y_MAX) | _BV(Z_MAX))
     #else
@@ -673,16 +876,52 @@ bool Probe::probe_down_to_z(const float z, const feedRate_t fr_mm_s) {
     #endif
   );
 
+  // If a trigger was detected, perform a very short re-check to filter single-sample glitches
+  if (probe_triggered) {
+    safe_delay(PROBE_DEBOUNCE_MS); // debounce/re-check (ms)
+    const bool probe_triggered2 = (
+      #if HAS_DELTA_SENSORLESS_PROBING
+        endstops.trigger_state() & (_BV(X_MAX) | _BV(Y_MAX) | _BV(Z_MAX))
+      #else
+        TEST(endstops.trigger_state(), Z_MIN_PROBE)
+      #endif
+    );
+    if (!probe_triggered2) {
+      SERIAL_ECHOLNPGM("DBG_PROBE: transient probe trigger ignored");
+      probe_triggered = false;
+    }
+    else {
+      SERIAL_ECHOLNPGM("DBG_PROBE: probe trigger confirmed");
+    }
+  }
+
+  // Debug: report whether the probe pin was seen triggered after descent
+  #if ENABLED(DEBUG_LEVELING_FEATURE)
+    if (DEBUGGING(LEVELING)) {
+      DEBUG_ECHOLNPGM("probe_triggered:", probe_triggered ? 1 : 0, " trigger_state:", int(endstops.trigger_state()), " current_z:", current_position.z);
+    }
+  #else
+    SERIAL_ECHOLNPGM("probe_triggered:", probe_triggered ? 1 : 0, " trigger_state:", int(endstops.trigger_state()), " current_z:", current_position.z);
+  #endif
+
+  // Unconditional debug (always print) to ensure probe/activation state is visible
+  SERIAL_ECHOLNPGM("DBG_PROBE: activation_before:", activation_before ? 1 : 0,
+                   " activation_after:", endstops.probe_switch_activated() ? 1 : 0,
+                   " probe_triggered:", probe_triggered ? 1 : 0,
+                   " trigger_state:", int(endstops.trigger_state()),
+                   " current_z:", current_position.z);
+
   // Offset sensorless probing
   #if HAS_DELTA_SENSORLESS_PROBING
     if (probe_triggered) refresh_largest_sensorless_adj();
   #endif
 
   TERN_(HAS_QUIET_PROBING, set_probing_paused(false));
+  // Disable endstops after probe completes
+  endstops.not_homing();
 
   // Re-enable stealthChop if used. Disable diag1 pin on driver.
   #if ENABLED(SENSORLESS_PROBING)
-    endstops.not_homing();
     #if HAS_DELTA_SENSORLESS_PROBING
       if (test_sensitivity.x) tmc_disable_stallguard(stepperX, stealth_states.x);
       if (test_sensitivity.y) tmc_disable_stallguard(stepperY, stealth_states.y);
@@ -717,6 +956,18 @@ bool Probe::probe_down_to_z(const float z, const feedRate_t fr_mm_s) {
   // Get Z where the steppers were interrupted
   set_current_from_steppers_for_axis(Z_AXIS);
 
+  // Debug: report if the activation switch became active during the descent
+  {
+    const bool activation_after = endstops.probe_switch_activated();
+    if (!activation_before && activation_after) {
+      #if ENABLED(DEBUG_LEVELING_FEATURE)
+        if (DEBUGGING(LEVELING)) DEBUG_ECHOLNPGM("PROBE_ACTIVATION_SWITCH became ACTIVE at Z:", current_position.z);
+      #else
+        SERIAL_ECHOLNPGM("PROBE_ACTIVATION_SWITCH became ACTIVE at Z:", current_position.z);
+      #endif
+    }
+  }
+
   // Tell the planner where we actually are
   sync_plan_position();
 
@@ -742,18 +993,64 @@ bool Probe::probe_down_to_z(const float z, const feedRate_t fr_mm_s) {
    * @return TRUE if the tare cold not be completed
    */
   bool Probe::tare() {
+    // Always print a short debug header for tare attempts so it's visible in any build
+    const bool z_raw_before =
+      #if USE_Z_MIN_PROBE
+        READ(Z_MIN_PROBE_PIN)
+      #else
+        false
+      #endif
+    ;
+    const bool act_raw_before =
+      #if ENABLED(PROBE_ACTIVATION_SWITCH)
+        READ(PROBE_ACTIVATION_SWITCH_PIN)
+      #else
+        false
+      #endif
+    ;
+    const int trigger_before = int(endstops.trigger_state());
+    SERIAL_ECHOLNPGM("DBG_PROBE: tare() start Z:", current_position.z,
+                     " probe_en:", endstops.probe_switch_activated() ? 1 : 0,
+                     " z_raw:", z_raw_before ? 1 : 0,
+                     " act_raw:", act_raw_before ? 1 : 0,
+                     " trigger_state:", trigger_before);
+
     #if ALL(PROBE_ACTIVATION_SWITCH, PROBE_TARE_ONLY_WHILE_INACTIVE)
+      // Report activation state and Z before attempting tare
       if (endstops.probe_switch_activated()) {
-        if (DEBUGGING(LEVELING)) DEBUG_ECHOLNPGM("Cannot tare an active probe");
+        SERIAL_ECHOLNPGM("DBG_PROBE: Tare blocked - activation switch active (probe_en=1)");
         return true;
       }
     #endif
 
-  SERIAL_ECHOLNPGM("Taring probe");
+    SERIAL_ECHOLNPGM("Taring probe");
+    SERIAL_ECHOLNPGM("DBG_PROBE: toggling PROBE_TARE_PIN");
     WRITE(PROBE_TARE_PIN, PROBE_TARE_STATE);
     delay(PROBE_TARE_TIME);
     WRITE(PROBE_TARE_PIN, !PROBE_TARE_STATE);
     delay(PROBE_TARE_DELAY);
+
+    // Report activation state and Z after tare (include raw reads and trigger state)
+    const bool z_raw_after =
+      #if USE_Z_MIN_PROBE
+        READ(Z_MIN_PROBE_PIN)
+      #else
+        false
+      #endif
+    ;
+    const bool act_raw_after =
+      #if ENABLED(PROBE_ACTIVATION_SWITCH)
+        READ(PROBE_ACTIVATION_SWITCH_PIN)
+      #else
+        false
+      #endif
+    ;
+    const int trigger_after = int(endstops.trigger_state());
+    SERIAL_ECHOLNPGM("DBG_PROBE: Tare done Z:", current_position.z,
+                     " probe_en:", endstops.probe_switch_activated() ? 1 : 0,
+                     " z_raw:", z_raw_after ? 1 : 0,
+                     " act_raw:", act_raw_after ? 1 : 0,
+                     " trigger_state:", trigger_after);
 
     endstops.hit_on_purpose();
     return false;
@@ -822,7 +1119,8 @@ float Probe::run_z_probe(const bool sanity_check/*=true*/, const float z_min_poi
     if (DEBUGGING(LEVELING)) DEBUG_ECHOLNPGM("1st Probe Z:", z1);
 
     // Raise to give the probe clearance
-    do_z_clearance(z1 + (Z_CLEARANCE_MULTI_PROBE), false);
+    const float clearance_needed = probe_safe_clearance_for_z(Z_CLEARANCE_MULTI_PROBE);
+    do_z_clearance(z1 + clearance_needed, true);
 
   #elif Z_PROBE_FEEDRATE_FAST != Z_PROBE_FEEDRATE_SLOW
 
@@ -1011,6 +1309,11 @@ float Probe::probe_at_point(
   // Move the probe to the starting XYZ
   do_blocking_move_to(npos, feedRate_t(XY_PROBE_FEEDRATE_MM_S));
 
+  // Diagnostic: report endstops/stepper state immediately after arriving at probe point
+  // This injects an M119-equivalent so the host log shows stepper enable states and raw probe pins
+  SERIAL_ECHOLNPGM("DBG_PROBE: At probe point - invoking M119 for diagnostics");
+  endstops.report_states();
+
   // Change Z motor current to homing current
   TERN_(PROBING_USE_CURRENT_HOME, set_homing_current(Z_AXIS));
 
@@ -1034,11 +1337,29 @@ float Probe::probe_at_point(
     // Debug: capture deploy() result and probe trigger state to diagnose failures
     {
       const bool did_deploy = deploy();
+      // Always print deploy() return so it's visible in any build
+      SERIAL_ECHOLNPGM("DBG_PROBE: deploy() returned:", did_deploy ? 1 : 0);
       #if ENABLED(BLTOUCH)
         if (DEBUGGING(LEVELING)) SERIAL_ECHOLN("Probe deploy() returned:", did_deploy);
         if (DEBUGGING(LEVELING)) SERIAL_ECHOLN("BLTouch triggered:", bltouch.triggered());
       #else
         if (DEBUGGING(LEVELING)) SERIAL_ECHOLN("Probe deploy() returned:", did_deploy);
+      #endif
+
+      // If compiled with PROBE_ACTIVATION_SWITCH support and a calibrated
+      // probe enable-off height has been stored by M905, raise the nozzle
+      // to that height + margin before taring/probing. This prevents
+      // spurious between-point activation caused by ISR-latched triggers.
+      #if ENABLED(PROBE_ACTIVATION_SWITCH)
+        const float raise_to = probe_safe_clearance_for_z(z_clearance);
+        if (current_position.z < raise_to) {
+          // Move up to the computed safe enable-off height (best-effort)
+          do_blocking_move_to_xy_z(xy_pos_t{ current_position[X_AXIS], current_position[Y_AXIS] }, raise_to, homing_feedrate(Z_AXIS));
+          safe_delay(MarlinSettings::get_m905_step_settle_ms());
+          if (PROBE_TRIGGERED()) {
+            SERIAL_ECHOLNPGM("DBG_PROBE: probe still active after raise to stored enable-off height", raise_to);
+          }
+        }
       #endif
 
       measured_z = did_deploy ? NAN : run_z_probe(sanity_check, z_min_point, z_clearance) + offset.z;
@@ -1051,9 +1372,9 @@ float Probe::probe_at_point(
         default: break;
         case PROBE_PT_RAISE:
           if (raise_after_is_rel)
-            do_z_clearance_by(z_clearance);
+            do_z_clearance_by(probe_safe_clearance_for_z(z_clearance));
           else
-            do_z_clearance(z_clearance);
+            do_z_clearance(probe_safe_clearance_for_z(z_clearance));
           break;
         case PROBE_PT_STOW: case PROBE_PT_LAST_STOW:
           if (stow()) measured_z = NAN;   // Error on stow?
@@ -1071,6 +1392,8 @@ float Probe::probe_at_point(
   SERIAL_ECHOLN("Probe failed at XY:", rx, ",", ry);
   SERIAL_ECHOLN(" current_position.z:", current_position.z);
   LCD_MESSAGE(MSG_LCD_PROBING_FAILED);
+  // Ensure any 'wait for user' modal state is cleared so UI buttons (Back, etc.) remain responsive.
+  TERN_(HAS_RESUME_CONTINUE, wait_for_user = false);
       #if DISABLED(G29_RETRY_AND_RECOVER)
         SERIAL_ERROR_MSG(STR_ERR_PROBING_FAILED);
       #endif

@@ -45,6 +45,14 @@ class MarlinSettings {
 
     static void reset();
     static bool save();    // Return 'true' if data was saved
+    // Probe enable-off height helpers (M905)
+    static void set_probe_en_off_height(const float v);
+    static float get_probe_en_off_height();
+    // Persisted tuning for M905 and safety margin
+    static void set_probe_en_off_margin(const float v);
+    static float get_probe_en_off_margin();
+    static void set_m905_step_settle_ms(const uint16_t v);
+    static uint16_t get_m905_step_settle_ms();
 
     FORCE_INLINE static bool init_eeprom() {
       reset();

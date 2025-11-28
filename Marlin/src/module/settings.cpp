@@ -35,8 +35,7 @@
  *       either sets a Sane Default, or results in No Change to the existing value.
  */
 
-// Change EEPROM version if the structure changes
-#define EEPROM_VERSION "V90"
+#define EEPROM_VERSION "V92"
 #define EEPROM_OFFSET 100
 
 // Check the integrity of data offsets.
@@ -289,6 +288,9 @@ typedef struct SettingsDataStruct {
   //
   #if NUM_AXES
     xyz_pos_t probe_offset;                             // M851 X Y Z
+    float     probe_en_off_height;                      // M905 calibrated probe enable-off height (mm)
+    float     probe_en_off_margin;                      // M905 safety margin (mm)
+    uint16_t  m905_step_settle_ms;                      // M905 step settle delay (ms)
   #endif
 
   //
@@ -712,6 +714,11 @@ typedef struct SettingsDataStruct {
 
 MarlinSettings settings;
 
+// Runtime storage for M905-calibrated probe enable-off and tuning values
+static float probe_en_off_height = PROBE_EN_OFF_HEIGHT_DEFAULT;
+static float probe_en_off_margin = PROBE_EN_OFF_MARGIN;
+static uint16_t m905_step_settle_ms = M905_STEP_SETTLE_MS;
+
 uint16_t MarlinSettings::datasize() { return sizeof(SettingsData); }
 
 /**
@@ -771,6 +778,32 @@ void MarlinSettings::postprocess() {
   TERN_(HAS_LCD_BRIGHTNESS, ui.refresh_brightness());
   TERN_(HAS_BACKLIGHT_TIMEOUT, ui.refresh_backlight_timeout());
   TERN_(HAS_DISPLAY_SLEEP, ui.refresh_screen_timeout());
+}
+
+// Accessors for the M905 calibrated probe enable-off height
+void MarlinSettings::set_probe_en_off_height(const float v) {
+  probe_en_off_height = v;
+}
+
+float MarlinSettings::get_probe_en_off_height() {
+  return probe_en_off_height;
+}
+
+// Accessors for persisted M905 tuning
+void MarlinSettings::set_probe_en_off_margin(const float v) {
+  probe_en_off_margin = v;
+}
+
+float MarlinSettings::get_probe_en_off_margin() {
+  return probe_en_off_margin;
+}
+
+void MarlinSettings::set_m905_step_settle_ms(const uint16_t v) {
+  m905_step_settle_ms = v;
+}
+
+uint16_t MarlinSettings::get_m905_step_settle_ms() {
+  return m905_step_settle_ms;
 }
 
 #if ALL(PRINTCOUNTER, EEPROM_SETTINGS)
@@ -1061,6 +1094,20 @@ void MarlinSettings::postprocess() {
         constexpr xyz_pos_t zpo{0};
       #endif
       EEPROM_WRITE(zpo);
+      
+      // Persist calibrated probe enable-off height (M905)
+      #if HAS_BED_PROBE
+        const float penh = probe_en_off_height;
+        const float penh_margin = probe_en_off_margin;
+        const uint16_t penh_settle = m905_step_settle_ms;
+      #else
+        constexpr float penh = PROBE_EN_OFF_HEIGHT_DEFAULT;
+        constexpr float penh_margin = PROBE_EN_OFF_MARGIN;
+        constexpr uint16_t penh_settle = M905_STEP_SETTLE_MS;
+      #endif
+      EEPROM_WRITE(penh);
+      EEPROM_WRITE(penh_margin);
+      EEPROM_WRITE(penh_settle);
     }
     #endif
 
@@ -2121,6 +2168,22 @@ void MarlinSettings::postprocess() {
           xyz_pos_t zpo;
         #endif
         EEPROM_READ(zpo);
+        // Retrieve stored M905 probe enable-off height (if present)
+        #if HAS_BED_PROBE
+          float penh;
+          EEPROM_READ(penh);
+          float penh_margin;
+          uint16_t penh_settle;
+          EEPROM_READ(penh_margin);
+          EEPROM_READ(penh_settle);
+          if (!validating) {
+            probe_en_off_height = penh;
+            probe_en_off_margin = penh_margin;
+            m905_step_settle_ms = penh_settle;
+          }
+        #else
+          EEPROM_READ(dummyf);
+        #endif
       }
       #endif
 
@@ -3472,6 +3535,11 @@ void MarlinSettings::reset() {
     #else
       probe.offset.set(NUM_AXIS_LIST(0, 0, dpo[Z_AXIS], 0, 0, 0, 0, 0, 0));
     #endif
+    // Default calibrated probe enable-off height
+    probe_en_off_height = PROBE_EN_OFF_HEIGHT_DEFAULT;
+    // Default persisted tuning values
+    probe_en_off_margin = PROBE_EN_OFF_MARGIN;
+    m905_step_settle_ms  = M905_STEP_SETTLE_MS;
   #endif
 
   //
