@@ -55,16 +55,7 @@ class MarlinSettings {
     static void set_m905_step_settle_ms(const uint16_t v);
     static uint16_t get_m905_step_settle_ms();
 
-    FORCE_INLINE static bool init_eeprom() {
-      reset();
-      #if ENABLED(EEPROM_SETTINGS)
-        const bool success = save();
-        if (TERN0(EEPROM_CHITCHAT, success)) report();
-        return success;
-      #else
-        return true;
-      #endif
-    }
+    static bool init_eeprom();  // Initialize EEPROM, preserving M48 history and bed mesh if version matches
 
     #if ENABLED(SD_FIRMWARE_UPDATE)
       static bool sd_update_status();                       // True if the SD-Firmware-Update EEPROM flag is set

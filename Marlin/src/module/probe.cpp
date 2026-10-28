@@ -967,10 +967,10 @@ bool Probe::probe_down_to_z(const float z, const feedRate_t fr_mm_s) {
   // Debug: report whether the probe pin was seen triggered after descent
   #if ENABLED(DEBUG_LEVELING_FEATURE)
     if (DEBUGGING(LEVELING)) {
-      DEBUG_ECHOLNPGM("probe_triggered:", probe_triggered ? 1 : 0, " trigger_state:", int(endstops.trigger_state()), " current_z:", current_position.z);
+      DEBUG_ECHOLNPGM("probe_triggered:", probe_triggered ? 1 : 0, " trigger_state:", int(endstops.trigger_state()), " current_z:", p_float_t(current_position.z, 3));
     }
   #else
-    SERIAL_ECHOLNPGM("probe_triggered:", probe_triggered ? 1 : 0, " trigger_state:", int(endstops.trigger_state()), " current_z:", current_position.z);
+    SERIAL_ECHOLNPGM("probe_triggered:", probe_triggered ? 1 : 0, " trigger_state:", int(endstops.trigger_state()), " current_z:", p_float_t(current_position.z, 3));
   #endif
 
   // Unconditional debug (always print) to ensure probe/activation state is visible
@@ -1045,9 +1045,9 @@ bool Probe::probe_down_to_z(const float z, const feedRate_t fr_mm_s) {
     const bool activation_after = endstops.probe_switch_activated();
     if (!activation_before && activation_after) {
       #if ENABLED(DEBUG_LEVELING_FEATURE)
-        if (DEBUGGING(LEVELING)) DEBUG_ECHOLNPGM("PROBE_ACTIVATION_SWITCH became ACTIVE at Z:", current_position.z);
+        if (DEBUGGING(LEVELING)) DEBUG_ECHOLNPGM("PROBE_ACTIVATION_SWITCH became ACTIVE at Z:", p_float_t(current_position.z, 3));
       #else
-        SERIAL_ECHOLNPGM("PROBE_ACTIVATION_SWITCH became ACTIVE at Z:", current_position.z);
+        SERIAL_ECHOLNPGM("PROBE_ACTIVATION_SWITCH became ACTIVE at Z:", p_float_t(current_position.z, 3));
       #endif
     }
   }

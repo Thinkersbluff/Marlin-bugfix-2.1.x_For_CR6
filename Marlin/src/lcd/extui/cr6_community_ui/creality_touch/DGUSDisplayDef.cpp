@@ -243,6 +243,9 @@ const uint16_t VPList_ABL[] PROGMEM = {
 const uint16_t VPList_CalibrateProbe[] PROGMEM = {
   VPList_CommonWithStatus,
   VP_PROBE_OFF_AT,
+  VP_BED_LEVEL_TOGGLE_ICON,
+  VP_Z_POSITION,
+  SP_Z_POSITION,
 
   0x0000
 };
@@ -637,7 +640,7 @@ const struct DGUS_VP_Variable ListOfVP[] PROGMEM = {
   // Position Data
   VPHELPER(VP_X_POSITION, &current_position.x, ScreenHandler.HandlePositionChange, ScreenHandler.DGUSLCD_SendFloatAsIntValueToDisplay<1>),
   VPHELPER(VP_Y_POSITION, &current_position.y, ScreenHandler.HandlePositionChange, ScreenHandler.DGUSLCD_SendFloatAsIntValueToDisplay<1>),
-  VPHELPER(VP_Z_POSITION, &current_position.z, ScreenHandler.HandlePositionChange, ScreenHandler.DGUSLCD_SendFloatAsIntValueToDisplay<1>),
+  VPHELPER(VP_Z_POSITION, &current_position.z, ScreenHandler.HandlePositionChange, ScreenHandler.DGUSLCD_SendFloatAsIntValueToDisplay<2>),
   VPHELPER(VP_Z_POSITION_PRECISION, &current_position.z, nullptr, ScreenHandler.DGUSLCD_SendFloatAsLongValueToDisplay<2>),
 
   VPHELPER(SP_X_POSITION, nullptr, nullptr, ScreenHandler.SendAxisTrustValue<X_AXIS>),
@@ -654,8 +657,11 @@ const struct DGUS_VP_Variable ListOfVP[] PROGMEM = {
   VPHELPER(VP_CALIBRATE_SAVE, nullptr, DGUSCrealityDisplay_HandleReturnKeyEvent, nullptr),
   VPHELPER(VP_SAFE_TARE_TEST, nullptr, DGUSCrealityDisplay_HandleReturnKeyEvent, nullptr),
   VPHELPER(VP_PROBE_OFF_AT, nullptr, nullptr, ScreenHandler.DGUSLCD_SendProbeOffAt),
+  VPHELPER(VP_BED_LEVEL_TOGGLE_ICON, &Planner::leveling_active, nullptr, (ScreenHandler.DGUSLCD_SendIconValue<ICON_TOGGLE_ON, ICON_TOGGLE_OFF>)),
   // Navigation helper to go from Z-Offset Level (screen 52) -> Calibrate_Probe (screen 84)
   VPHELPER(VP_NAV_CALIBRATE_PROBE, nullptr, (ScreenHandler.DGUSLCD_NavigateToPage<DGUSLCD_SCREEN_CALIBRATE_PROBE>), nullptr),
+
+  VPHELPER(VP_BED_LEVEL_TOGGLE_BUTTON, nullptr, ScreenHandler.ToggleLeveling, nullptr),
 
   VPHELPER(VP_FAN_TOGGLE, &thermalManager.fan_speed[0], nullptr, ScreenHandler.DGUSLCD_SendFanStatusToDisplay),
   VPHELPER(VP_Fan0_Percentage, &thermalManager.fan_speed[0], ScreenHandler.HandleFanSpeedChanged, ScreenHandler.DGUSLCD_SendFanSpeedToDisplay),
@@ -757,6 +763,9 @@ const struct DGUS_VP_Variable ListOfVP[] PROGMEM = {
 
   // Park nozzle button - triggers G27 (park nozzle)
   VPHELPER(VP_PARK_NOZZLE, nullptr, ScreenHandler.HandleParkNozzle, nullptr),
+
+  // M290 baby stepping control (temporary Z adjustment, does not modify M851)
+  VPHELPER(VP_M290_BABYSTEP, nullptr, ScreenHandler.HandleM290Babystep, nullptr),
 
   // Additional settings
   VPHELPER(VP_SCREEN_BACKLIGHT_STANDBY, &ScreenHandler.Settings.standby_screen_brightness, ScreenHandler.HandleTouchScreenStandbyBrightnessSetting, ScreenHandler.DGUSLCD_SendWordValueToDisplay),

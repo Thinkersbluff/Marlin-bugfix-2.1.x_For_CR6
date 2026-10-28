@@ -48,7 +48,7 @@
  * M48: Z probe repeatability measurement function.
  *
  * Usage:
- *   M48 <P#> <X#> <Y#> <V#> <E> <L#> <S> <C#>
+ *   M48 <P#> <X#> <Y#> <V#> <E> <L#> <S> <C#> <W> <H>
  *     P = Number of sampled points (4-50, default 10)
  *     X = Sample X position
  *     Y = Sample Y position
@@ -57,8 +57,15 @@
  *     L = Number of legs of movement before probe
  *     S = Schizoid (Or Star if you prefer)
  *     C = Enable probe temperature compensation (0 or 1, default 1)
+ *     W = Save result to EEPROM history (stores up to 8 runs)
+ *     H = Display EEPROM history only (no probing) - defaults to H1
+ *     H1 = Display EEPROM history (same as H with no value)
+ *     H0 = Erase EEPROM history
  *
  * This function requires the machine to be homed before invocation.
+ * 
+ * Note: M48 history is automatically preserved when upgrading firmware
+ * at the same EEPROM version using M502 or automatic EEPROM initialization.
  */
 
 void GcodeSuite::M48() {
@@ -67,7 +74,7 @@ void GcodeSuite::M48() {
   // Helper to emit stored M48 history without probing
   const auto dump_history = []{
     struct HistHeader { uint32_t magic; uint8_t count; uint8_t idx; uint16_t reserved; } hdr;
-    struct ProbeRepeatEntry { float mean_trigger; float sigma_trigger; uint16_t n_samples; float measured_range; uint32_t ts; } entry;
+    struct ProbeRepeatEntry { float median_trigger; float sigma_trigger; uint16_t n_samples; float measured_range; uint32_t ts; } entry;
     constexpr uint32_t PROBE_HIST_MAGIC = 0x50525248; // 'PRRH'
     constexpr int PROBE_HIST_N = 8;
     const int base = MarlinSettings::eeprom_offset() + MarlinSettings::datasize();
@@ -89,19 +96,42 @@ void GcodeSuite::M48() {
       const int entry_pos = base + sizeof(hdr) + idx * sizeof(entry);
       persistentStore.read_data(entry_pos, (uint8_t*)&entry, sizeof(entry));
       SERIAL_ECHOPGM("#"); SERIAL_ECHO(i + 1);
-      SERIAL_ECHOPGM(" mean="); SERIAL_ECHO(p_float_t(entry.mean_trigger, 6));
-      SERIAL_ECHOPGM(" sigma="); SERIAL_ECHO(p_float_t(entry.sigma_trigger, 6));
+      SERIAL_ECHOPGM(" median="); SERIAL_ECHO(p_float_t(entry.median_trigger, 3));
+      SERIAL_ECHOPGM(" sigma="); SERIAL_ECHO(p_float_t(entry.sigma_trigger, 3));
       SERIAL_ECHOPGM(" n="); SERIAL_ECHO(entry.n_samples);
-      SERIAL_ECHOPGM(" range="); SERIAL_ECHO(p_float_t(entry.measured_range, 6)); SERIAL_EOL();
+      SERIAL_ECHOPGM(" range="); SERIAL_ECHO(p_float_t(entry.measured_range, 3)); SERIAL_EOL();
     }
     persistentStore.access_finish();
   };
 
-  // If the user requested only history (H) with no other options, skip probing
-  const bool hist_only = parser.seen('H')
+  // Check for history operations (H parameter)
+  if (parser.seen('H')
     && !(parser.seen('P') || parser.seen('X') || parser.seen('Y') || parser.seen('V')
-       || parser.seen('E') || parser.seen('L') || parser.seen('S') || parser.seen('C') || parser.seen('W'));
-  if (hist_only) { dump_history(); return; }
+       || parser.seen('E') || parser.seen('L') || parser.seen('S') || parser.seen('C') || parser.seen('W'))) {
+    // M48 H with no value defaults to 1 (display), M48 H0 erases, M48 H1+ displays
+    const int h_val = parser.seenval('H') ? parser.intval('H') : 1;
+    if (h_val == 0) {
+      // Erase M48 history
+      struct HistHeader { uint32_t magic; uint8_t count; uint8_t idx; uint16_t reserved; } hdr;
+      const int base = MarlinSettings::eeprom_offset() + MarlinSettings::datasize();
+      
+      hdr.magic = 0x00000000;  // Clear magic to invalidate
+      hdr.count = 0;
+      hdr.idx = 0;
+      hdr.reserved = 0;
+      
+      persistentStore.access_start();
+      persistentStore.write_data(base, (const uint8_t*)&hdr, sizeof(hdr));
+      persistentStore.access_finish();
+      
+      SERIAL_ECHOLNPGM("M48: EEPROM history erased.");
+    }
+    else {
+      // Display history
+      dump_history();
+    }
+    return;
+  }
 #endif
 
   if (homing_needed_error()) return;
@@ -168,19 +198,20 @@ void GcodeSuite::M48() {
         sigma = 0.0,    // Standard deviation of all points so far
         min = 99999.9,  // Smallest value sampled so far
         max = -99999.9, // Largest value sampled so far
-        sample_set[n_samples];  // Storage for sampled values
+        sample_set[n_samples],  // Storage for sampled values
+        trigger_heights[50];    // Storage for absolute trigger heights (for EEPROM history)
 
   auto dev_report = [](const bool verbose, const float mean, const float sigma, const float min, const float max, const bool final=false) {
     if (verbose) {
-      SERIAL_ECHO_START(); SERIAL_ECHOPGM("Mean: "); SERIAL_ECHO(p_float_t(mean, 6));
-      if (!final) { SERIAL_ECHOPGM(" Sigma: "); SERIAL_ECHO(p_float_t(sigma, 6)); }
+      SERIAL_ECHO_START(); SERIAL_ECHOPGM("Deltas from Offset = Mean: "); SERIAL_ECHO(p_float_t(mean, 3));
+      if (!final) { SERIAL_ECHOPGM(" Sigma: "); SERIAL_ECHO(p_float_t(sigma, 3)); }
       SERIAL_ECHOPGM(" Min: "); SERIAL_ECHO(p_float_t(min, 3));
       SERIAL_ECHOPGM(" Max: "); SERIAL_ECHO(p_float_t(max, 3));
       SERIAL_ECHOPGM(" Range: "); SERIAL_ECHO(p_float_t(max - min, 3)); SERIAL_EOL();
       if (final) SERIAL_EOL();
     }
     if (final) {
-      SERIAL_ECHO_START(); SERIAL_ECHOPGM("Standard Deviation: "); SERIAL_ECHO(p_float_t(sigma, 6)); SERIAL_EOL();
+      SERIAL_ECHO_START(); SERIAL_ECHOPGM("Standard Deviation: "); SERIAL_ECHO(p_float_t(sigma, 3)); SERIAL_EOL();
       SERIAL_EOL();
     }
   };
@@ -275,7 +306,11 @@ void GcodeSuite::M48() {
       probing_good = !isnan(pz);
       if (!probing_good) break;
 
-      // Store the new sample
+      // Store absolute trigger height for history storage (before any offset adjustment)
+      // pz contains the probe-offset-adjusted value, but we need the raw trigger Z
+      trigger_heights[n] = pz - probe.offset.z;
+
+      // Store the sample (pz is the offset-adjusted Z coordinate for statistical calculations)
       sample_set[n] = pz;
 
       // Keep track of the largest and smallest samples
@@ -294,7 +329,7 @@ void GcodeSuite::M48() {
 
       if (verbose_level > 1) {
         SERIAL_ECHO_START(); SERIAL_ECHO(n + 1); SERIAL_ECHOPGM(" of "); SERIAL_ECHO(n_samples);
-        SERIAL_ECHOPGM(": z: "); SERIAL_ECHO(p_float_t(pz, 3)); SERIAL_CHAR(' ');
+        SERIAL_ECHOPGM(": z: "); SERIAL_ECHO(p_float_t(trigger_heights[n], 3)); SERIAL_CHAR(' ');
         dev_report(verbose_level > 2, mean, sigma, min, max);
         SERIAL_EOL();
       }
@@ -305,15 +340,92 @@ void GcodeSuite::M48() {
   probe.stow();
 
   if (probing_good) {
+    // Compute trimmed median from absolute trigger heights for storage (more robust than mean for historical baseline)
+    // Sort trigger_heights for median calculation
+    float trimmed_median = mean;  // Default to mean if not enough samples to trim
+    if (n_samples > 4) {
+      // Create a sorted copy of absolute trigger heights
+      float sorted_triggers[50];
+      for (uint8_t i = 0; i < n_samples; ++i) sorted_triggers[i] = trigger_heights[i];
+      for (uint8_t a = 0; a < n_samples; ++a) {
+        for (uint8_t b = a + 1; b < n_samples; ++b) {
+          if (sorted_triggers[b] < sorted_triggers[a]) {
+            const float t = sorted_triggers[a];
+            sorted_triggers[a] = sorted_triggers[b];
+            sorted_triggers[b] = t;
+          }
+        }
+      }
+      // Compute median of trimmed data (skip highest and lowest)
+      const uint8_t trimmed_count = n_samples - 2;
+      const uint8_t mid = trimmed_count / 2;
+      trimmed_median = (trimmed_count & 1)
+        ? sorted_triggers[1 + mid]  // Odd: middle value (offset by 1 for trim)
+        : (sorted_triggers[1 + mid - 1] + sorted_triggers[1 + mid]) / 2.0f;  // Even: average of two middle
+    }
+    
     SERIAL_ECHOLNPGM("Finished!");
     dev_report(verbose_level > 0, mean, sigma, min, max, true);
 
 #if ENABLED(EEPROM_SETTINGS)
+    // Compare this M48 run with the oldest stored history entry and warn
+    // (non-blocking). This comparison runs every time M48 completes and
+    // does not cause writing — writing still requires W1.
+    {
+      struct HistHeader { uint32_t magic; uint8_t count; uint8_t idx; uint16_t reserved; } hdr;
+      struct ProbeRepeatEntry { float median_trigger; float sigma_trigger; uint16_t n_samples; float measured_range; uint32_t ts; } entry;
+      constexpr uint32_t PROBE_HIST_MAGIC = 0x50525248; // 'PRRH'
+      constexpr int PROBE_HIST_N = 8;
+
+      const int base = MarlinSettings::eeprom_offset() + MarlinSettings::datasize();
+      int pos = base;
+      persistentStore.access_start();
+      if (persistentStore.read_data(pos, (uint8_t*)&hdr, sizeof(hdr))) {
+        // No history present - nothing to compare
+        persistentStore.access_finish();
+      }
+      else if (hdr.magic != PROBE_HIST_MAGIC || hdr.count == 0) {
+        // Invalid or empty history
+        persistentStore.access_finish();
+      }
+      else {
+        // Oldest entry index
+        const uint8_t oldest_idx = (hdr.idx + PROBE_HIST_N - hdr.count) % PROBE_HIST_N;
+        const int entry_pos = base + sizeof(hdr) + oldest_idx * sizeof(entry);
+        if (!persistentStore.read_data(entry_pos, (uint8_t*)&entry, sizeof(entry))) {
+          const float new_median = trimmed_median;
+          const float new_range = max - min;
+          const float drift_thresh = _MAX(3.0f * entry.sigma_trigger, 0.05f);
+          const float range_thresh = _MAX(3.0f * entry.sigma_trigger, 0.05f);
+          bool warned = false;
+
+          if (fabsf(new_median - entry.median_trigger) > drift_thresh) {
+            SERIAL_ECHOLNPGM("M48: WARNING: median trigger drift vs oldest history exceeds threshold");
+            SERIAL_ECHOPGM("  oldest_median="); SERIAL_ECHO(p_float_t(entry.median_trigger, 3));
+            SERIAL_ECHOPGM(" new_median="); SERIAL_ECHO(p_float_t(new_median, 3));
+            SERIAL_ECHOPGM(" thresh="); SERIAL_ECHOLN(p_float_t(drift_thresh, 3));
+            warned = true;
+          }
+
+          if ((new_range - entry.measured_range) > range_thresh) {
+            SERIAL_ECHOLNPGM("M48: WARNING: measured range increased vs oldest history");
+            SERIAL_ECHOPGM("  oldest_range="); SERIAL_ECHO(p_float_t(entry.measured_range, 3));
+            SERIAL_ECHOPGM(" new_range="); SERIAL_ECHO(p_float_t(new_range, 3));
+            SERIAL_ECHOPGM(" thresh="); SERIAL_ECHOLN(p_float_t(range_thresh, 3));
+            warned = true;
+          }
+
+          if (warned) SERIAL_ECHOLNPGM("M48: Advises: clean nozzle/drivetrain and rerun M48.");
+        }
+        persistentStore.access_finish();
+      }
+    }
+
     // Optional: save this M48 run to EEPROM history if requested with W1
     if (parser.boolval('W')) {
       // History layout: header then N entries
       struct HistHeader { uint32_t magic; uint8_t count; uint8_t idx; uint16_t reserved; } hdr;
-      struct ProbeRepeatEntry { float mean_trigger; float sigma_trigger; uint16_t n_samples; float measured_range; uint32_t ts; } entry;
+      struct ProbeRepeatEntry { float median_trigger; float sigma_trigger; uint16_t n_samples; float measured_range; uint32_t ts; } entry;
       constexpr uint32_t PROBE_HIST_MAGIC = 0x50525248; // 'PRRH'
       constexpr int PROBE_HIST_N = 8;
 
@@ -341,8 +453,8 @@ void GcodeSuite::M48() {
         persistentStore.write_data(pos, (const uint8_t*)&hdr, sizeof(hdr));
       }
 
-      // Prepare entry
-      entry.mean_trigger = mean;
+      // Prepare entry (use trimmed_median for more robust historical baseline)
+      entry.median_trigger = trimmed_median;
       entry.sigma_trigger = sigma;
       entry.n_samples = uint16_t(n_samples);
       entry.measured_range = max - min;

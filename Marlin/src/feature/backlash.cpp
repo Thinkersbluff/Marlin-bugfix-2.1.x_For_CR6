@@ -225,12 +225,17 @@ class Backlash::StepAdjuster {
     if (measured_count.z == 255) return;
 
     const float start_height = current_position.z;
-    while (current_position.z < (start_height + BACKLASH_MEASUREMENT_LIMIT) && PROBE_TRIGGERED())
+    SERIAL_ECHOLNPGM("DBG_BACKLASH: measure start Z:", start_height);
+    while (current_position.z < (start_height + BACKLASH_MEASUREMENT_LIMIT) && PROBE_TRIGGERED()) {
       do_blocking_move_to_z(current_position.z + BACKLASH_MEASUREMENT_RESOLUTION, MMM_TO_MMS(BACKLASH_MEASUREMENT_FEEDRATE));
+      SERIAL_ECHOLNPGM("DBG_BACKLASH: curr Z:", current_position.z);
+    }
 
     // The backlash from all probe points is averaged, so count the number of measurements
-    measured_mm.z += current_position.z - start_height;
+    const float delta = current_position.z - start_height;
+    measured_mm.z += delta;
     measured_count.z++;
+    SERIAL_ECHOLNPGM("DBG_BACKLASH: sample delta:", delta, " count:", measured_count.z, " avg:", (measured_count.z ? measured_mm.z / measured_count.z : 0.0f));
   }
 
 #endif

@@ -1714,6 +1714,17 @@ void DGUSScreenHandler::HandleMotorLockUnlock(DGUS_VP_Variable &var, void *val_p
     PrintJobRecovery::enable(!PrintJobRecovery::enabled);
   }
 
+  void DGUSScreenHandler::ToggleLeveling(DGUS_VP_Variable &var, void *val_ptr) {
+    // Request the planner to enable/disable bed leveling via M420.
+    // Do NOT flip the local `Planner::leveling_active` here so the UI
+    // reflects the actual state after Marlin processes M420.
+    if (Planner::leveling_active) {
+      queue.inject_P(PSTR("M420 S0"));
+    } else {
+      queue.inject_P(PSTR("M420 S1"));
+    }
+  }
+
   void DGUSScreenHandler::HandlePowerLossRecovery(DGUS_VP_Variable &var, void *val_ptr) {
     uint16_t value = swap16(*(uint16_t*)val_ptr);
     if (value) {
@@ -1967,6 +1978,29 @@ void DGUSScreenHandler::HandleLiveAdjustZ(DGUS_VP_Variable &var, void *val_ptr, 
 // This wrapper function is needed to avoid pulling in ExtUI in DGUSScreenHandler.h
 float DGUSScreenHandler::GetCurrentLifeAdjustZ() {
   return ExtUI::getZOffset_mm();
+}
+
+void DGUSScreenHandler::HandleM290Babystep(DGUS_VP_Variable &var, void *val_ptr) {
+  DEBUG_ECHOLNPGM("HandleM290Babystep");
+  
+  uint16_t payload = swap16(*(uint16_t*)val_ptr);
+  
+  // 0x0001 = down 0.01mm, 0x0002 = up 0.01mm
+  // Use G91 (relative) + G0 Z to move and update current_position
+  if (payload == 0x0001) {
+    // Move down 0.01mm
+    queue.inject(F("G91\nG0 Z-0.01 F60\nG90"));
+    DEBUG_ECHOLNPGM("Z Adjust: Down 0.01mm");
+  }
+  else if (payload == 0x0002) {
+    // Move up 0.01mm
+    // Larger upward step to exceed typical backlash and avoid hunting
+    queue.inject(F("G91\nG0 Z0.05 F60\nG90"));
+    DEBUG_ECHOLNPGM("Z Adjust: Up 0.05mm");
+  }
+  
+  ScreenHandler.ForceCompleteUpdate();
+  return;
 }
 
 void DGUSScreenHandler::HandleHeaterControl(DGUS_VP_Variable &var, void *val_ptr) {

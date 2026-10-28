@@ -33,9 +33,16 @@
  * ALSO: Variables in the Store and Retrieve sections must be in the same order.
  *       If a feature is disabled, some data must still be written that, when read,
  *       either sets a Sane Default, or results in No Change to the existing value.
+ *
+ * DATA MIGRATION: When EEPROM is reinitialized (M502 or automatic init after
+ * validation failure), if the stored EEPROM version matches the firmware version,
+ * the following data is automatically preserved and restored:
+ *   - M48 probe repeatability history (up to 8 runs)
+ *   - UBL mesh data (stored in separate area, always preserved)
+ * This allows firmware updates at the same EEPROM version to retain calibration data.
  */
 
-#define EEPROM_VERSION "V95"
+#define EEPROM_VERSION "V96"
 #define EEPROM_OFFSET 100
 
 
@@ -295,11 +302,14 @@ typedef struct SettingsDataStruct {
     xyz_pos_t probe_offset;                             // M851 X Y Z
   #endif
 
+  //
   // STABLE_Z_HOME - persisted parameters
+  //
   #if ENABLED(STABLE_Z_HOME)
     uint16_t stable_z_home_max_probes;                 // STABLE_Z_HOME_MAX_PROBES
     uint8_t  stable_z_home_window_size;                // STABLE_Z_HOME_WINDOW_SIZE
     float    stable_z_home_range_tolerance;            // STABLE_Z_HOME_RANGE_TOLERANCE
+    float    stable_z_home_max_z_shift;                // STABLE_Z_HOME_MAX_Z_SHIFT
   #endif
 
   //
@@ -1063,6 +1073,106 @@ uint16_t MarlinSettings::get_m905_step_settle_ms() {
       return ERR_EEPROM_SIZE;
     }
     return ERR_EEPROM_NOERR;
+  }
+
+  #if ENABLED(Z_MIN_PROBE_REPEATABILITY_TEST) && ENABLED(EEPROM_SETTINGS)
+    // Helper structures and functions to preserve M48 history across EEPROM resets
+    struct M48HistHeader { uint32_t magic; uint8_t count; uint8_t idx; uint16_t reserved; };
+    struct M48ProbeEntry { float median_trigger; float sigma_trigger; uint16_t n_samples; float measured_range; uint32_t ts; };
+    constexpr uint32_t M48_HIST_MAGIC = 0x50525248; // 'PRRH'
+    constexpr int M48_HIST_N = 8;
+
+    // Buffer to temporarily hold M48 history during EEPROM reset
+    static M48HistHeader m48_backup_hdr;
+    static M48ProbeEntry m48_backup_entries[M48_HIST_N];
+    static bool m48_backup_valid = false;
+
+    static void backup_m48_history() {
+      const int base = MarlinSettings::eeprom_offset() + MarlinSettings::datasize();
+      int pos = base;
+      persistentStore.access_start();
+      
+      m48_backup_valid = false;
+      if (!persistentStore.read_data(pos, (uint8_t*)&m48_backup_hdr, sizeof(m48_backup_hdr))) {
+        if (m48_backup_hdr.magic == M48_HIST_MAGIC && m48_backup_hdr.count > 0 && m48_backup_hdr.count <= M48_HIST_N) {
+          // Read all entries
+          for (uint8_t i = 0; i < m48_backup_hdr.count; ++i) {
+            const int entry_pos = base + sizeof(m48_backup_hdr) + i * sizeof(M48ProbeEntry);
+            if (persistentStore.read_data(entry_pos, (uint8_t*)&m48_backup_entries[i], sizeof(M48ProbeEntry))) {
+              break; // Read error
+            }
+          }
+          m48_backup_valid = true;
+          SERIAL_ECHOLNPGM("M48 history backed up (", (int)m48_backup_hdr.count, " entries)");
+        }
+      }
+      persistentStore.access_finish();
+    }
+
+    static void restore_m48_history() {
+      if (!m48_backup_valid) return;
+      
+      const int base = MarlinSettings::eeprom_offset() + MarlinSettings::datasize();
+      int pos = base;
+      persistentStore.access_start();
+      
+      // Write header
+      persistentStore.write_data(pos, (const uint8_t*)&m48_backup_hdr, sizeof(m48_backup_hdr));
+      
+      // Write all entries
+      for (uint8_t i = 0; i < m48_backup_hdr.count; ++i) {
+        const int entry_pos = base + sizeof(m48_backup_hdr) + i * sizeof(M48ProbeEntry);
+        persistentStore.write_data(entry_pos, (const uint8_t*)&m48_backup_entries[i], sizeof(M48ProbeEntry));
+      }
+      
+      persistentStore.access_finish();
+      SERIAL_ECHOLNPGM("M48 history restored (", (int)m48_backup_hdr.count, " entries)");
+      m48_backup_valid = false;
+    }
+  #endif // Z_MIN_PROBE_REPEATABILITY_TEST && EEPROM_SETTINGS
+
+  /**
+   * Initialize EEPROM to Factory Defaults
+   * Preserves M48 history and bed mesh data if EEPROM version matches
+   */
+  bool MarlinSettings::init_eeprom() {
+    #if ENABLED(EEPROM_SETTINGS)
+      bool preserve_data = false;
+      
+      // Check if EEPROM version matches before wiping data
+      const EEPROM_Error version_check = check_version();
+      if (version_check == ERR_EEPROM_NOERR) {
+        preserve_data = true;
+        SERIAL_ECHOLNPGM("EEPROM version matches - preserving M48 history and bed mesh data");
+        
+        // Backup M48 history if it exists
+        #if ENABLED(Z_MIN_PROBE_REPEATABILITY_TEST)
+          backup_m48_history();
+        #endif
+        
+        // Note: UBL mesh data is already stored in a separate area that won't be affected
+        // by the main settings reset, so it doesn't need special handling
+      }
+      
+      // Reset settings to defaults
+      reset();
+      
+      // Save new default settings
+      const bool success = save();
+      
+      // Restore preserved data if version matched
+      if (preserve_data && success) {
+        #if ENABLED(Z_MIN_PROBE_REPEATABILITY_TEST)
+          restore_m48_history();
+        #endif
+      }
+      
+      if (TERN0(EEPROM_CHITCHAT, success)) report();
+      return success;
+    #else
+      reset();
+      return true;
+    #endif
   }
 
   /**
@@ -2373,13 +2483,16 @@ uint16_t MarlinSettings::get_m905_step_settle_ms() {
           uint16_t _szh_max_probes;
           uint8_t  _szh_window_size;
           float    _szh_retry_tolerance;
+          float    _szh_max_z_shift;
           EEPROM_READ(_szh_max_probes);
           EEPROM_READ(_szh_window_size);
           EEPROM_READ(_szh_retry_tolerance);
+          EEPROM_READ(_szh_max_z_shift);
           if (!validating) {
             stable_z_home_max_probes = _szh_max_probes;
             stable_z_home_window_size = _szh_window_size;
             stable_z_home_range_tolerance = _szh_retry_tolerance;
+            stable_z_home_max_z_shift = _szh_max_z_shift;
           }
         #endif
       }
@@ -3421,13 +3534,15 @@ uint16_t MarlinSettings::get_m905_step_settle_ms() {
     }
 
     // Otherwise reset settings to default "factory settings"
-    reset();
-
     // Options to overwrite the EEPROM on error
     #if ANY(EEPROM_AUTO_INIT, EEPROM_INIT_NOW)
+      // init_eeprom() will handle reset() and preserve data if version matches
       (void)init_eeprom();
       LCD_MESSAGE(MSG_EEPROM_INITIALIZED);
       SERIAL_ECHO_MSG(STR_EEPROM_INITIALIZED);
+    #else
+      // Just reset to defaults without saving to EEPROM
+      reset();
     #endif
 
     return false;

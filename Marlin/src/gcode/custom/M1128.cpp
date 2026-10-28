@@ -20,6 +20,95 @@
 #include "../../module/settings.h"
 #include "../../module/stable_z_home.h"
 
+#if ENABLED(Z_MIN_PROBE_REPEATABILITY_TEST) && ENABLED(EEPROM_SETTINGS)
+  #include "../../HAL/shared/eeprom_api.h"
+  
+  // Helper functions to load M48 history and compute baseline trigger height
+  namespace {
+    float baseline_trigger_height = NAN;
+    bool history_valid = false;
+    
+    void load_m48_history() {
+      // M48 history structures (must match M48.cpp)
+      struct HistHeader { uint32_t magic; uint8_t count; uint8_t idx; uint16_t reserved; };
+      struct ProbeRepeatEntry { float median_trigger; float sigma_trigger; uint16_t n_samples; float measured_range; uint32_t ts; };
+      
+      constexpr uint32_t PROBE_HIST_MAGIC = 0x50525248; // 'PRRH'
+      constexpr int PROBE_HIST_N = 8;
+      constexpr int MIN_HISTORY_FOR_BASELINE = 4;
+      
+      const int base = MarlinSettings::eeprom_offset() + MarlinSettings::datasize();
+      int pos = base;
+      
+      HistHeader hdr;
+      persistentStore.access_start();
+      
+      if (persistentStore.read_data(pos, (uint8_t*)&hdr, sizeof(hdr)) || hdr.magic != PROBE_HIST_MAGIC || hdr.count < MIN_HISTORY_FOR_BASELINE) {
+        persistentStore.access_finish();
+        history_valid = false;
+        baseline_trigger_height = NAN;
+        return;
+      }
+      
+      // Read all median_trigger values from history
+      float medians[PROBE_HIST_N];
+      uint8_t count = 0;
+      
+      for (uint8_t i = 0; i < hdr.count; ++i) {
+        const uint8_t idx = (hdr.idx + PROBE_HIST_N - hdr.count + i) % PROBE_HIST_N;
+        const int entry_pos = base + sizeof(hdr) + idx * sizeof(ProbeRepeatEntry);
+        
+        ProbeRepeatEntry entry;
+        persistentStore.read_data(entry_pos, (uint8_t*)&entry, sizeof(entry));
+        
+        if (!isnan(entry.median_trigger)) {
+          medians[count++] = entry.median_trigger;
+        }
+      }
+      
+      persistentStore.access_finish();
+      
+      if (count < MIN_HISTORY_FOR_BASELINE) {
+        history_valid = false;
+        baseline_trigger_height = NAN;
+        return;
+      }
+      
+      // Sort medians for trimmed median calculation
+      for (uint8_t a = 0; a < count; ++a) {
+        for (uint8_t b = a + 1; b < count; ++b) {
+          if (medians[b] < medians[a]) {
+            const float t = medians[a];
+            medians[a] = medians[b];
+            medians[b] = t;
+          }
+        }
+      }
+      
+      // Compute trimmed median (drop highest and lowest, then take median of remainder)
+      float baseline;
+      if (count > 4) {
+        // Trim: skip first and last (already sorted), then compute median of middle values
+        const uint8_t trimmed_count = count - 2;
+        const uint8_t mid = trimmed_count / 2;
+        baseline = (trimmed_count & 1) 
+          ? medians[1 + mid]  // Odd count: middle value (offset by 1 for trim)
+          : (medians[1 + mid - 1] + medians[1 + mid]) / 2.0f;  // Even count: average of two middle values
+      }
+      else {
+        // Too few samples to trim - just use median
+        baseline = (count & 1) ? medians[count / 2] : (medians[count / 2 - 1] + medians[count / 2]) / 2.0f;
+      }
+      
+      baseline_trigger_height = baseline;
+      history_valid = true;
+    }
+    
+    float get_baseline_trigger_height() { return baseline_trigger_height; }
+    bool has_valid_history() { return history_valid; }
+  }
+#endif
+
 #if ENABLED(STABLE_Z_HOME) && HAS_BED_PROBE
 
 void GcodeSuite::M1128() {
@@ -52,6 +141,13 @@ void GcodeSuite::M1128() {
     pt.x = (probe.min_x() + probe.max_x()) / 2.0f;
     pt.y = (probe.min_y() + probe.max_y()) / 2.0f;
     SERIAL_ECHO_START(); SERIAL_ECHOLNPGM("M1128: requested point unreachable, using center");
+  }
+
+  // Ensure X, Y, and Z axes are homed before probing
+  if (!all_axes_trusted()) {
+    SERIAL_ECHO_START(); SERIAL_ECHOLNPGM("M1128: axes not homed, performing G28");
+    queue.inject_P(G28_STR);
+    return;
   }
 
   const uint16_t max_probes = (stable_z_home_max_probes > 0) ? stable_z_home_max_probes : 20;
@@ -132,21 +228,46 @@ void GcodeSuite::M1128() {
       SERIAL_ECHOPGM(" range="); SERIAL_ECHO(p_float_t(this_pair_range, 3)); SERIAL_EOL();
     }
 
-    // Early MAX_Z_SHIFT check after the first probe pair: abort immediately if configured and out-of-tolerance
+    // Early contamination check after the first probe pair: abort immediately if configured and out-of-tolerance
+    // Compare first trigger height against M48 historical baseline (if available) or -probe.offset.z (fallback)
     if (attempt == 0 && trig_count >= 2 && stable_z_home_max_z_shift > 0.0f) {
-      // Use the maximum of the first two trigger heights and compare to the configured probe offset
+      // Use the maximum of the first two trigger heights
       const float max_first_h = _MAX(trig_buf[0], trig_buf[1]);
-      // Early tolerance: 3x the M1128 T factor per your request
+      
+      #if ENABLED(Z_MIN_PROBE_REPEATABILITY_TEST) && ENABLED(EEPROM_SETTINGS)
+        // Load M48 history from EEPROM (only done once per M1128 invocation)
+        if (attempt == 0) load_m48_history();
+      #endif
+      
+      // Determine baseline: use M48 history if available, otherwise fall back to -probe.offset.z
+      float baseline;
+      const char* baseline_source;
+      
+      #if ENABLED(Z_MIN_PROBE_REPEATABILITY_TEST) && ENABLED(EEPROM_SETTINGS)
+        if (has_valid_history()) {
+          baseline = get_baseline_trigger_height();
+          baseline_source = "M48 history";
+        }
+        else
+      #endif
+      {
+        baseline = -probe.offset.z;
+        baseline_source = "-probe.offset.z";
+      }
+      
+      // Early tolerance: 3x the M1128 T factor
       const float early_tol = 3.0f * tol;
-      const float trigger_delta = fabsf(max_first_h - probe.offset.z);
+      const float trigger_delta = fabsf(max_first_h - baseline);
 
       SERIAL_ECHO_START(); SERIAL_ECHOPGM("M1128: early-check max_first_h="); SERIAL_ECHO(p_float_t(max_first_h, 3));
-      SERIAL_ECHOPGM(" probe.offset.z="); SERIAL_ECHO(p_float_t(probe.offset.z, 3));
+      SERIAL_ECHOPGM(" baseline="); SERIAL_ECHO(p_float_t(baseline, 3));
+      SERIAL_ECHOPGM(" ("); SERIAL_ECHOPGM(baseline_source); SERIAL_ECHOPGM(")");
       SERIAL_ECHOPGM(" delta="); SERIAL_ECHO(p_float_t(trigger_delta, 3));
       SERIAL_ECHOPGM(" early_tol="); SERIAL_ECHO(p_float_t(early_tol, 3)); SERIAL_EOL();
 
       if (trigger_delta > early_tol) {
-        SERIAL_ECHO_START(); SERIAL_ECHOLNPGM("M1128: aborting - Check the probe and Z Offset; first trigger height is outside tolerance.");
+        SERIAL_ECHO_START(); SERIAL_ECHOPGM("M1128: aborting - first trigger height deviates from ");
+        SERIAL_ECHOPGM(baseline_source); SERIAL_ECHOLNPGM("; possible contamination detected.");
         // Return to homing height and abort
         do_blocking_move_to(xyz_pos_t({ current_position[X_AXIS], current_position[Y_AXIS], initial_homing_z }), MMM_TO_MMS(3000.0f));
         success = false;
@@ -188,17 +309,28 @@ void GcodeSuite::M1128() {
 
     // Only evaluate window when we have enough samples
     if (collected >= window_size) {
-      // Compute the current window min/max/mean
-      float minv = 1e9f, maxv = -1e9f, sum = 0.0f;
+      // Compute the current window range from samples (used for stability checking)
+      float minv = 1e9f, maxv = -1e9f;
       uint16_t wstart = (idx + cap - window_size) % cap;
       for (uint8_t w = 0; w < window_size; ++w) {
         const float v = samples[(wstart + w) % cap];
         if (v < minv) minv = v;
         if (v > maxv) maxv = v;
-        sum += v;
       }
       const float range = maxv - minv;
-      const float mean = sum / float(window_size);
+
+      // Compute mean from raw trigger heights (for diagnostic display)
+      float trigger_sum = 0.0f;
+      uint16_t trigger_count = 0;
+      for (uint8_t w = 0; w < window_size; ++w) {
+        const uint16_t si = (wstart + w) % cap;
+        const uint8_t tc = trig_counts[si];
+        for (uint8_t ti = 0; ti < tc; ++ti) {
+          trigger_sum += trig_values[si][ti];
+          ++trigger_count;
+        }
+      }
+      const float mean = (trigger_count > 0) ? (trigger_sum / float(trigger_count)) : NAN;
 
       // Compute the median of the per-attempt pair ranges inside this window
       float wranges[16]; uint8_t wr_cnt = 0;
@@ -235,7 +367,7 @@ void GcodeSuite::M1128() {
         SERIAL_ECHO_START(); SERIAL_ECHOPGM("M1128: stable window mean="); SERIAL_ECHO(p_float_t(mean, 3)); SERIAL_EOL();
 
         // If we have enough consecutive stable windows, check range-history stability
-        if (consecutive_passes >= consecutive_required) {
+          if (consecutive_passes >= consecutive_required) {
           // Check variation of recent window medians
           float rh_min = 1e9f, rh_max = -1e9f;
           for (uint8_t r = 0; r < range_hist_collected; ++r) {
@@ -248,27 +380,63 @@ void GcodeSuite::M1128() {
             SERIAL_ECHOPGM("M1128: range_history min="); SERIAL_ECHO(p_float_t(rh_min, 3));
             SERIAL_ECHOPGM(" max="); SERIAL_ECHO(p_float_t(rh_max, 3));
             SERIAL_ECHOPGM(" var="); SERIAL_ECHO(p_float_t(range_var, 3)); SERIAL_EOL();
-          if (!isnan(range_var) && range_var <= tol) {
+            if (!isnan(range_var) && range_var <= tol) {
+              // Compute 1-sample trimmed mean from raw trigger heights for use as the homing reference.
+              // Collect all trigger heights from the final sliding window.
+              if (collected >= window_size) {
+                const uint16_t fstart = (idx + cap - window_size) % cap;
+                float all_triggers[128]; // window_size * max_triggers_per_attempt
+                uint8_t trig_total = 0;
+                for (uint8_t w = 0; w < window_size; ++w) {
+                  const uint16_t si = (fstart + w) % cap;
+                  for (uint8_t ti = 0; ti < trig_counts[si]; ++ti) {
+                    if (trig_total < 128) all_triggers[trig_total++] = trig_values[si][ti];
+                  }
+                }
+                // Sort all collected trigger heights
+                for (uint8_t a = 0; a < trig_total; ++a) for (uint8_t b = a + 1; b < trig_total; ++b) if (all_triggers[b] < all_triggers[a]) { float t = all_triggers[a]; all_triggers[a] = all_triggers[b]; all_triggers[b] = t; }
+                // Compute trimmed mean (discard highest and lowest) - reserved for future use
+                // if (trig_total > 2) {
+                //   float sum = 0.0f;
+                //   for (uint8_t ti = 1; ti < trig_total - 1; ++ti) sum += all_triggers[ti];
+                //   // final_trimmed_mean = sum / float(trig_total - 2);
+                // }
+                // else if (trig_total > 0) {
+                //   float sum = 0.0f; for (uint8_t ti = 0; ti < trig_total; ++ti) sum += all_triggers[ti];
+                //   // final_trimmed_mean = sum / float(trig_total);
+                // }
+              }
             // All checks passed for range stability — now optionally enforce MAX_Z_SHIFT
             bool shift_ok = true;
+            
+            // Compute first and last trigger heights for use in shift check and trimmed-mean homing.
+            // The ring buffer stores samples with `idx` pointing at the next insert position,
+            // and `collected` indicating how many valid samples exist.
+            const uint16_t first_idx = (idx + cap - collected) % cap;
+            const uint16_t last_idx  = (idx + cap - 1) % cap;
+            
+            // Use the first trigger of the first attempt and the last trigger of the last attempt
+            // to detect an observed shift during probing. Fall back to the stored `samples` values
+            // if per-trigger data isn't available for either attempt.
+            float first_trigger = samples[first_idx];
+            if (trig_counts[first_idx] > 0) first_trigger = trig_values[first_idx][0];
+            float last_trigger = samples[last_idx];
+            if (trig_counts[last_idx] > 0) last_trigger = trig_values[last_idx][trig_counts[last_idx] - 1];
+            
             if (stable_z_home_max_z_shift > 0.0f) {
               // Allowed shift: be conservative and require at least 3*tolerance or the configured max shift
               const float allowed_shift = _MAX(3.0f * tol, stable_z_home_max_z_shift);
-              // The probe mean is the average trigger height for the current window
-              const float expect_trigger_z = initial_homing_z + probe.offset.z;
-              const float trigger_delta = fabsf(mean - expect_trigger_z);
+              const float observed_shift = last_trigger - first_trigger;
 
-              // Diagnostic output
-              SERIAL_ECHO_START(); SERIAL_ECHOPGM("M1128: initial_homing_z="); SERIAL_ECHO(p_float_t(initial_homing_z, 3));
-              SERIAL_ECHOPGM(" probe.offset.z="); SERIAL_ECHO(p_float_t(probe.offset.z, 3));
-              SERIAL_ECHOPGM(" expect_trigger_z="); SERIAL_ECHO(p_float_t(expect_trigger_z, 3));
-              SERIAL_ECHOPGM(" mean="); SERIAL_ECHO(p_float_t(mean, 3));
-              SERIAL_ECHOPGM(" delta="); SERIAL_ECHO(p_float_t(trigger_delta, 3));
+              // Diagnostic output (report the exact trigger values used)
+              SERIAL_ECHO_START(); SERIAL_ECHOPGM("M1128: first_trigger="); SERIAL_ECHO(p_float_t(first_trigger, 3));
+              SERIAL_ECHOPGM(" last_trigger="); SERIAL_ECHO(p_float_t(last_trigger, 3));
+              SERIAL_ECHOPGM(" observed_shift="); SERIAL_ECHO(p_float_t(observed_shift, 3));
               SERIAL_ECHOPGM(" allowed="); SERIAL_ECHO(p_float_t(allowed_shift, 3)); SERIAL_EOL();
 
-              if (trigger_delta > allowed_shift) {
+              if (fabsf(observed_shift) > allowed_shift) {
                 // Failure: abort probing, return to homing height, and alert operator
-                SERIAL_ECHO_START(); SERIAL_ECHOPGM("M1128: Z shift too large (delta>"); SERIAL_ECHO(p_float_t(allowed_shift, 3)); SERIAL_ECHOLNPGM(") - aborting. Check Z Offset and nozzle cleanliness.");
+                SERIAL_ECHO_START(); SERIAL_ECHOPGM("M1128: observed Z shift too large (|last-first|>"); SERIAL_ECHO(p_float_t(allowed_shift, 3)); SERIAL_ECHOLNPGM(") - aborting. Check Z Offset and nozzle cleanliness.");
                 // Move Z back to initial homing height
                 do_blocking_move_to(xyz_pos_t({ current_position[X_AXIS], current_position[Y_AXIS], initial_homing_z }), MMM_TO_MMS(3000.0f));
                 shift_ok = false;
@@ -280,9 +448,8 @@ void GcodeSuite::M1128() {
             }
 
             if (shift_ok) {
-              // All checks passed. Declare success.
+              // All checks passed. Declare the current (last trigger) position as Z home.
               set_current_from_steppers_for_axis(Z_AXIS);
-              // Keep existing homing behavior (use the stepper trigger position)
               set_axis_is_at_home(Z_AXIS);
               sync_plan_position();
               success = true;
@@ -368,6 +535,33 @@ void GcodeSuite::M1128() {
     }
 
     SERIAL_ECHO_START(); SERIAL_ECHOPGM("              Measured Range = "); SERIAL_ECHO(p_float_t(measured_range, 3)); SERIAL_EOL();
+
+    // Compute 1-sample trimmed mean from raw trigger heights over final sliding window (if available)
+    if (collected >= window_size) {
+      const uint16_t fstart = (idx + cap - window_size) % cap;
+      float all_triggers[128]; // window_size * max_triggers_per_attempt
+      uint8_t trig_total = 0;
+      for (uint8_t w = 0; w < window_size; ++w) {
+        const uint16_t si = (fstart + w) % cap;
+        for (uint8_t ti = 0; ti < trig_counts[si]; ++ti) {
+          if (trig_total < 128) all_triggers[trig_total++] = trig_values[si][ti];
+        }
+      }
+      // Sort all collected trigger heights
+      for (uint8_t a = 0; a < trig_total; ++a) for (uint8_t b = a + 1; b < trig_total; ++b) if (all_triggers[b] < all_triggers[a]) { float t = all_triggers[a]; all_triggers[a] = all_triggers[b]; all_triggers[b] = t; }
+      // Compute trimmed mean (discard highest and lowest)
+      float trimmed_mean = 0.0f;
+      if (trig_total > 2) {
+        float sum = 0.0f;
+        for (uint8_t ti = 1; ti < trig_total - 1; ++ti) sum += all_triggers[ti];
+        trimmed_mean = sum / float(trig_total - 2);
+      }
+      else if (trig_total > 0) {
+        float sum = 0.0f; for (uint8_t ti = 0; ti < trig_total; ++ti) sum += all_triggers[ti];
+        trimmed_mean = sum / float(trig_total);
+      }
+      SERIAL_ECHO_START(); SERIAL_ECHOPGM("              Trimmed Mean(1-sample) = "); SERIAL_ECHOLN(p_float_t(trimmed_mean, 3));
+    }
   }
 
   // PASS / FAIL

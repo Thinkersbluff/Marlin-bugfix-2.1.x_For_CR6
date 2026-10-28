@@ -284,6 +284,12 @@ constexpr uint16_t VP_NAV_CALIBRATE_PROBE = 0x102E;
 // Park nozzle button (mapped to screens 43/44/45) - injects G27 when pressed
 constexpr uint16_t VP_PARK_NOZZLE = 0x102F;
 
+// M290 Baby stepping control (0x0001 = down 0.01mm, 0x0002 = up 0.01mm)
+constexpr uint16_t VP_M290_BABYSTEP = 0x1031;
+// Bed leveling toggle (Calibrate Probe screen): icon + button
+constexpr uint16_t VP_BED_LEVEL_TOGGLE_ICON = 0x1033;
+constexpr uint16_t VP_BED_LEVEL_TOGGLE_BUTTON = 0x1035;
+
 // // SDCard File Listing
 constexpr uint16_t VP_SD_ScrollEvent = 0x20D4; // Data: 0 for "up a directory", numbers are the amount to scroll, e.g -1 one up, 1 one down
 constexpr uint16_t VP_SD_FileSelected = 0x2200; // Number of file field selected.

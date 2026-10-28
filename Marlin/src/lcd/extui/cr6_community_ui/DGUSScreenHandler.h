@@ -137,6 +137,9 @@ public:
     static void HandlePowerLossRecovery(DGUS_VP_Variable &var, void *val_ptr);
   #endif
 
+  // Toggle bed leveling on/off via M420 S1 / M420 S0
+  static void ToggleLeveling(DGUS_VP_Variable &var, void *val_ptr);
+
   // Version sanity check
   static void HandleScreenVersion(DGUS_VP_Variable &var, void *val_ptr);
 
@@ -198,6 +201,9 @@ public:
   // Hook for live z adjust action
   static void HandleLiveAdjustZ(DGUS_VP_Variable &var, void *val_ptr, const_float_t scalingFactor);
   static float GetCurrentLifeAdjustZ();
+
+  // Hook for M290 baby stepping (temporary Z adjustment)
+  static void HandleM290Babystep(DGUS_VP_Variable &var, void *val_ptr);
 
   // Hook for heater control
   static void HandleHeaterControl(DGUS_VP_Variable &var, void *val_ptr);

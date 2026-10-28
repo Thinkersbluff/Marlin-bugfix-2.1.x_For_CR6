@@ -1698,7 +1698,7 @@
 // CR-6 SE optical sensor on PB2 - prevents false triggers during travel
 // #define DEBUG_LEVELING_FEATURE
 // Enable verbose probe diagnostics (M119 snapshots, ISR timing, planner vs stepper deltas)
-#define PROBE_DEBUG
+// #define PROBE_DEBUG
 #define PROBE_ACTIVATION_SWITCH
 #if ENABLED(PROBE_ACTIVATION_SWITCH)
   #define PROBE_ACTIVATION_SWITCH_STATE LOW // State indicating probe is active
@@ -2417,7 +2417,7 @@
   #define STABLE_Z_HOME_WINDOW_SIZE    4
 
   // Tolerance (max - min) within a window to consider it "stable" (in mm)
-  #define STABLE_Z_HOME_RANGE_TOLERANCE 0.020f
+  #define STABLE_Z_HOME_RANGE_TOLERANCE 0.015f
   // Maximum allowed shift (mm) between the initial homing Z and the probe-derived
   // median Z before failing M1128. Can be overridden at runtime.
   #define STABLE_Z_HOME_MAX_Z_SHIFT 0.060f
