@@ -1,3 +1,11 @@
+NOTES TO CR6 USERS WHO WISH TO PARTICIPATE IN THIS PROJECT:
+
+- The Marlin/Configuration.h, Marlin/Configuration_adv.h and platformio.ini files in the root of this fork are specifically tailored to run on Thinkersbluff's own customized CR6-SE.  You will likely need to edit those files for your own printer configuration.
+- Issues and Discussions on this repository are not necessarily read or reviewed by Thinkyhead or the upstream Marlin team.  They are Thinkersbluff's own way of keeping his head clear as to what has been discovered during the testing that may require feedback to the upstream team or may lead to future customizations of the CR6 DWIN_SET.
+- Thinkyhead is controlling the integration project and making pre-compiled firmwares for stock-configuration CR6-SE printers available for testing at https://github.com/MarlinFirmware/Marlin/pull/19958.  
+
+
+---
 <p align="center"><img src="buildroot/share/pixmaps/logo/marlin-outrun-nf-500.png" height="250" alt="MarlinFirmware's logo" /></p>
 
 <h1 align="center">Marlin 3D Printer Firmware</h1>
