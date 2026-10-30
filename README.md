@@ -5,7 +5,14 @@
 **CAUTION:**
 - The Marlin/Configuration.h, Marlin/Configuration_adv.h and platformio.ini files in the root of this fork are specifically tailored by Thinkersbluff to run on Thinkersbluff's own customized CR6-SE.  They may help to inspire and inform your own efforts to tailor those files to your own non-stock CR6 machines, but they are not likely to work with your machines as-is.
 - Issues and Discussions on this repository are Thinkersbluff's way of keeping his own head clear as to what has been discovered during the testing that may require feedback to the upstream team or may lead to future customizations of the CR6 DWIN_SET.  Nothing on this repo represents any opinion or commitment by Thinkyhead or the upstream Marlin team.
+If you would like to contribute to the Issues and Discussions or to add your own, please feel free to do that here.
 
+Please understand:
+ - We are all volunteers, here.
+ - We are motivated by what we might achieve for ourselves and for the CR6 Community.
+ - We are under no obligation to actually finish what we have started here.
+ - If you decide to flash this code to your own printer, it is totally at your own risk.
+ - There is no warranty expressed or implied that this code will work as described or as intended, on your particular printer.
 
 ---
 <p align="center"><img src="buildroot/share/pixmaps/logo/marlin-outrun-nf-500.png" height="250" alt="MarlinFirmware's logo" /></p>
