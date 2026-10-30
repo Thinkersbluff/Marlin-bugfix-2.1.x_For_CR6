@@ -11,7 +11,7 @@ Please understand:
  - We are all volunteers, here.
  - We are motivated by what we might achieve for ourselves and for the CR6 Community.
  - We are under no obligation to actually finish what we have started here.
- - If you decide to flash this code to your own printer, it is totally at your own risk.
+ - If you decide to flash this code to your own printer, you do so entirely at your own risk.
  - There is no warranty expressed or implied that this code will work as described or as intended, on your particular printer.
 
 ---
