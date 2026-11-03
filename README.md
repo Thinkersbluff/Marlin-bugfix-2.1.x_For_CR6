@@ -1,6 +1,6 @@
 **NOTES TO CR6 USERS WHO WISH TO PARTICIPATE IN THIS PROJECT:**
 
-- Thinkyhead is controlling the actual CR6-SE integration project and is making pre-compiled firmwares for stock-configuration CR6-SE printers available for testing at https://github.com/MarlinFirmware/Marlin/pull/19958.
+- Thinkyhead is controlling the actual CR6-SE integration project and is making pre-compiled firmwares for stock-configuration CR6-SE printers available for testing at [https://github.com/MarlinFirmware/Marlin/pull/19958](https://github.com/MarlinFirmware/Marlin/pull/19958#issuecomment-6404508230).
 
 **CAUTION:**
 - The Marlin/Configuration.h, Marlin/Configuration_adv.h and platformio.ini files in the root of this fork are specifically tailored by Thinkersbluff to run on Thinkersbluff's own customized CR6-SE.  They may help to inspire and inform your own efforts to tailor those files to your own non-stock CR6 machines, but they are not likely to work with your machines as-is.
