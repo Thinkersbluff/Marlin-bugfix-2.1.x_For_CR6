@@ -621,6 +621,8 @@ static_assert(COUNT(arm) == LOGICAL_AXES, "AXIS_RELATIVE_MODES must contain " _L
     #error "MMU2_EXTRUDER_SENSOR requires an LCD supporting MarlinUI."
   #elif ENABLED(MMU_MENUS) && !HAS_MARLINUI_MENU
     #error "MMU_MENUS requires an LCD supporting MarlinUI."
+  #elif HAS_PRUSA_MMU3 && DISABLED(ADVANCED_PAUSE_FEATURE)
+    #error "MMU3 requires ADVANCED_PAUSE_FEATURE (for hardcoded 'M600')."
   #elif HAS_PRUSA_MMU3 && !HAS_MARLINUI_MENU
     #error "MMU3 requires an LCD supporting MarlinUI."
   #elif HAS_PRUSA_MMU3 && DISABLED(MMU_MENUS)
@@ -629,6 +631,26 @@ static_assert(COUNT(arm) == LOGICAL_AXES, "AXIS_RELATIVE_MODES must contain " _L
     #error "MMU3 requires EEPROM_SETTINGS."
   #elif DISABLED(ADVANCED_PAUSE_FEATURE)
     static_assert(nullptr == strstr(MMU2_FILAMENT_RUNOUT_SCRIPT, "M600"), "ADVANCED_PAUSE_FEATURE is required for MMU2_FILAMENT_RUNOUT_SCRIPT to use M600.");
+  #endif
+#endif
+
+/**
+ * 3D Chameleon requirements
+ */
+#if HAS_CHAMELEON
+  #if EXTRUDERS < 2 || EXTRUDERS > 4
+    #undef SINGLENOZZLE
+    #error "CHAMELEON requires 2 to 4 EXTRUDERS (one per filament). Please update your Configuration."
+  #elif NUM_AXES < 3
+    #error "CHAMELEON requires X, Y, and Z axes."
+  #elif !HAS_TEMP_HOTEND
+    #error "CHAMELEON requires a hotend temperature sensor (TEMP_SENSOR_0)."
+  #elif !defined(CHAMELEON_BUTTON_AXIS) || !defined(CHAMELEON_BUTTON_POS)
+    #error "CHAMELEON requires CHAMELEON_BUTTON_AXIS and CHAMELEON_BUTTON_POS. Please update your Configuration_adv.h."
+  #elif CHAMELEON_PRESS_MM <= 0
+    #error "CHAMELEON_PRESS_MM must be greater than 0."
+  #elif CHAMELEON_PULSE_MS < 100
+    #error "CHAMELEON_PULSE_MS must be at least 100."
   #endif
 #endif
 
@@ -3072,6 +3094,39 @@ static_assert(NUM_SERVOS <= NUM_SERVO_PLUGS, "NUM_SERVOS (or some servo index) i
   #endif
 #endif
 
+/**
+ * MKS WiFi module. Works with any UI, or none, but it needs its own UART,
+ * the ESP control pins, and media to transfer files to.
+ */
+#if ENABLED(MKS_WIFI_MODULE)
+  #if DISABLED(WIFISUPPORT)
+    #error "MKS_WIFI_MODULE requires WIFISUPPORT."
+  #elif ANY(WEBSUPPORT, OTASUPPORT)
+    #error "WEBSUPPORT and OTASUPPORT don't apply to MKS_WIFI_MODULE, which runs its own firmware."
+  #elif !defined(__STM32F1__) && !defined(HAL_STM32)
+    #error "MKS_WIFI_MODULE is only supported on STM32F1 and STM32 HAL boards."
+  #elif !PIN_EXISTS(WIFI_RESET) || !PIN_EXISTS(WIFI_IO1)
+    #error "MKS_WIFI_MODULE requires WIFI_RESET_PIN and WIFI_IO1_PIN. Your board doesn't support it."
+  #elif !HAS_MEDIA
+    #error "MKS_WIFI_MODULE requires SDSUPPORT."
+  #elif !defined(WIFI_SERIAL_PORT)
+    #error "MKS_WIFI_MODULE requires WIFI_SERIAL_PORT. Your board doesn't support it."
+  #elif ENABLED(MKS_WIFI_AP_MODE) && !defined(WIFI_SSID)
+    #error "MKS_WIFI_AP_MODE requires WIFI_SSID to name the access point."
+  #elif defined(WIFI_PWD) && !defined(WIFI_SSID)
+    #error "WIFI_PWD requires WIFI_SSID."
+  #endif
+  #ifdef WIFI_SSID
+    static_assert(sizeof(WIFI_SSID) <= 32, "WIFI_SSID must be 31 characters or fewer for MKS_WIFI_MODULE.");
+  #endif
+  #ifdef WIFI_PWD
+    static_assert(sizeof(WIFI_PWD) <= 64, "WIFI_PWD must be 63 characters or fewer for MKS_WIFI_MODULE.");
+  #endif
+  #ifdef MKS_WIFI_CLOUD_HOST
+    static_assert(sizeof(MKS_WIFI_CLOUD_HOST) <= 96, "MKS_WIFI_CLOUD_HOST must be 95 characters or fewer.");
+  #endif
+#endif
+
 #if defined(GRAPHICAL_TFT_UPSCALE) && !WITHIN(GRAPHICAL_TFT_UPSCALE, 2, 8)
   #error "GRAPHICAL_TFT_UPSCALE must be between 2 and 8."
 #endif
@@ -3200,6 +3255,8 @@ static_assert(NUM_SERVOS <= NUM_SERVO_PLUGS, "NUM_SERVOS (or some servo index) i
     #error "MMU_SERIAL_PORT cannot be the same as SERIAL_PORT."
   #elif defined(SERIAL_PORT_2) && MMU_SERIAL_PORT == SERIAL_PORT_2
     #error "MMU_SERIAL_PORT cannot be the same as SERIAL_PORT_2."
+  #elif defined(SERIAL_PORT_3) && MMU_SERIAL_PORT == SERIAL_PORT_3
+    #error "MMU_SERIAL_PORT cannot be the same as SERIAL_PORT_3."
   #elif defined(LCD_SERIAL_PORT) && MMU_SERIAL_PORT == LCD_SERIAL_PORT
     #error "MMU_SERIAL_PORT cannot be the same as LCD_SERIAL_PORT."
   #elif defined(RS485_SERIAL_PORT) && MMU_SERIAL_PORT == RS485_SERIAL_PORT
@@ -3215,6 +3272,8 @@ static_assert(NUM_SERVOS <= NUM_SERVO_PLUGS, "NUM_SERVOS (or some servo index) i
     #error "LCD_SERIAL_PORT cannot be the same as SERIAL_PORT."
   #elif defined(SERIAL_PORT_2) && LCD_SERIAL_PORT == SERIAL_PORT_2
     #error "LCD_SERIAL_PORT cannot be the same as SERIAL_PORT_2."
+  #elif defined(SERIAL_PORT_3) && LCD_SERIAL_PORT == SERIAL_PORT_3
+    #error "LCD_SERIAL_PORT cannot be the same as SERIAL_PORT_3."
   #elif defined(RS485_SERIAL_PORT) && LCD_SERIAL_PORT == RS485_SERIAL_PORT
     #error "LCD_SERIAL_PORT cannot be the same as RS485_SERIAL_PORT."
   #endif
@@ -3240,6 +3299,27 @@ static_assert(NUM_SERVOS <= NUM_SERVO_PLUGS, "NUM_SERVOS (or some servo index) i
     #error "RS485_SERIAL_PORT cannot be the same as SERIAL_PORT."
   #elif defined(SERIAL_PORT_2) && RS485_SERIAL_PORT == SERIAL_PORT_2
     #error "RS485_SERIAL_PORT cannot be the same as SERIAL_PORT_2."
+  #elif defined(SERIAL_PORT_3) && RS485_SERIAL_PORT == SERIAL_PORT_3
+    #error "RS485_SERIAL_PORT cannot be the same as SERIAL_PORT_3."
+  #endif
+#endif
+
+/**
+ * The MKS WiFi module drives its serial port directly, bypassing MarlinSerial
+ */
+#if ENABLED(MKS_WIFI_MODULE)
+  #if WIFI_SERIAL_PORT == SERIAL_PORT
+    #error "WIFI_SERIAL_PORT cannot be the same as SERIAL_PORT."
+  #elif defined(SERIAL_PORT_2) && WIFI_SERIAL_PORT == SERIAL_PORT_2
+    #error "WIFI_SERIAL_PORT cannot be the same as SERIAL_PORT_2."
+  #elif defined(SERIAL_PORT_3) && WIFI_SERIAL_PORT == SERIAL_PORT_3
+    #error "WIFI_SERIAL_PORT cannot be the same as SERIAL_PORT_3."
+  #elif defined(MMU_SERIAL_PORT) && WIFI_SERIAL_PORT == MMU_SERIAL_PORT
+    #error "WIFI_SERIAL_PORT cannot be the same as MMU_SERIAL_PORT."
+  #elif defined(LCD_SERIAL_PORT) && WIFI_SERIAL_PORT == LCD_SERIAL_PORT
+    #error "WIFI_SERIAL_PORT cannot be the same as LCD_SERIAL_PORT."
+  #elif defined(RS485_SERIAL_PORT) && WIFI_SERIAL_PORT == RS485_SERIAL_PORT
+    #error "WIFI_SERIAL_PORT cannot be the same as RS485_SERIAL_PORT."
   #endif
 #endif
 
@@ -4660,6 +4740,25 @@ static_assert(_PLUS_TEST(3), "DEFAULT_MAX_ACCELERATION values must be positive."
   #endif
 #endif
 
+/**
+ * Require certain features for DGUS_LCD_UI SERMOON_V1.
+ */
+#if DGUS_UI_IS(SERMOON_V1)
+  #if !(HOTENDS == 1 && EXTRUDERS == 1)
+    #error "DGUS_LCD_UI SERMOON_V1 requires 1 hotend and 1 extruder."
+  #elif !HAS_HEATED_BED
+    #error "DGUS_LCD_UI SERMOON_V1 requires a heated bed."
+  #elif !HAS_FAN
+    #error "DGUS_LCD_UI SERMOON_V1 requires a fan."
+  #elif !HAS_MEDIA
+    #error "DGUS_LCD_UI SERMOON_V1 requires SDSUPPORT."
+  #elif !defined(PREHEAT_1_TEMP_HOTEND) || !defined(PREHEAT_2_TEMP_HOTEND)
+    #error "DGUS_LCD_UI SERMOON_V1 requires 2 preheating presets."
+  #elif NUM_RUNOUT_SENSORS > 1
+    #error "DGUS_LCD_UI SERMOON_V1 requires NUM_RUNOUT_SENSORS < 2."
+  #endif
+#endif
+
 // JTAG support in the HAL
 #if ENABLED(DISABLE_DEBUG) && !defined(JTAGSWD_DISABLE)
   #error "DISABLE_DEBUG is not supported for the selected MCU/Board."
@@ -4805,10 +4904,14 @@ static_assert(_PLUS_TEST(3), "DEFAULT_MAX_ACCELERATION values must be positive."
 #endif // FT_MOTION
 
 /**
- * Resonance Test requires EMERGENCY_PARSER
+ * Resonance Test requires a 32-bit CPU and EMERGENCY_PARSER
  */
-#if ENABLED(RESONANCE_TEST) && DISABLED(EMERGENCY_PARSER)
-  #error "EMERGENCY_PARSER is required with RESONANCE_TEST (to cancel the test)."
+#if ENABLED(RESONANCE_TEST)
+  #ifdef __AVR__
+    #error "RESONANCE_TEST requires a 32-bit CPU."
+  #elif DISABLED(EMERGENCY_PARSER)
+    #error "EMERGENCY_PARSER is required with RESONANCE_TEST (to cancel the test)."
+  #endif
 #endif
 
 // Multi-Stepping Limit

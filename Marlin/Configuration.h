@@ -411,10 +411,11 @@
  *   PRUSA_MMU3           : Průša MMU3  (Requires MK3S extruder with motion sensor and MMU firmware version 3.x.x, EXTRUDERS = 5)
  *   EXTENDABLE_EMU_MMU2  : MMU with configurable number of filaments (ERCF, SMuFF or similar with Průša MMU2 compatible firmware)
  *   EXTENDABLE_EMU_MMU2S : MMUS with configurable number of filaments (ERCF, SMuFF or similar with Průša MMU2 compatible firmware)
+ *   CHAMELEON            : 3D Chameleon Mk4 (EXTRUDERS = 2 to 4). A single button is pressed by an axis move.
  *
  * Requires NOZZLE_PARK_FEATURE to park print head in case MMU unit fails.
  * See additional options in Configuration_adv.h.
- * :["PRUSA_MMU1", "PRUSA_MMU2", "PRUSA_MMU2S", "PRUSA_MMU3", "EXTENDABLE_EMU_MMU2", "EXTENDABLE_EMU_MMU2S"]
+ * :["PRUSA_MMU1", "PRUSA_MMU2", "PRUSA_MMU2S", "PRUSA_MMU3", "EXTENDABLE_EMU_MMU2", "EXTENDABLE_EMU_MMU2S", "CHAMELEON"]
  */
 //#define MMU_MODEL PRUSA_MMU3
 
@@ -2536,7 +2537,7 @@
 #if ENABLED(EEPROM_SETTINGS)
   #define EEPROM_AUTO_INIT    // Init EEPROM automatically on any errors.
   //#define EEPROM_INIT_NOW   // Init EEPROM on first boot after a new build.
-  #define EEPROM_AUTOSAVE_AFTER 5000  // (ms) Save settings this long after they're edited on a supporting LCD, once not printing.
+  //#define EEPROM_AUTOSAVE_AFTER 5000  // (ms) Save settings this long after they're edited on a supporting LCD, once not printing.
 #endif
 
 // @section host
@@ -3370,6 +3371,10 @@
  *  - Download https://www.crealitycloud.com/downloads/firmware/sermoon-series/sermoon-d1
  *  - Copy the DWIN_SET folder from the firmware package to the SD card.
  *
+ * SERMOON_V1 (T5L)
+ *  - Download https://www.crealitycloud.com/downloads/firmware/sermoon-series/sermoon-v1
+ *  - Copy the DWIN_SET folder from the firmware package to the SD card.
+ *
  * CREALITY_TOUCH
  *  - Creality CR-6 SE touch screen. Requires CR-6 Community touch screen firmware v61 or newer.
  *  - Download https://github.com/CR6Community/CR-6-touchscreen/releases
@@ -3381,7 +3386,7 @@
  *  - Plug the microSD card into the back of the display.
  *  - Boot the display and wait for the update to complete.
  *
- * :[ 'ORIGIN', 'FYSETC', 'HYPRECY', 'MKS', 'RELOADED', 'IA_CREALITY', 'E3S1PRO', 'CR10SPROV2', 'SERMOON_D1', 'CREALITY_TOUCH' ]
+ * :[ 'ORIGIN', 'FYSETC', 'HYPRECY', 'MKS', 'RELOADED', 'IA_CREALITY', 'E3S1PRO', 'CR10SPROV2', 'SERMOON_D1', 'SERMOON_V1', 'CREALITY_TOUCH' ]
  */
 #define DGUS_LCD_UI CREALITY_TOUCH
 #if DGUS_UI_IS(MKS)
@@ -3618,10 +3623,6 @@
   #define COMPACT_MARLIN_BOOT_LOGO  // Use compressed data to save Flash space
 #endif
 
-#if ENABLED(TFT_LVGL_UI)
-  //#define MKS_WIFI_MODULE // MKS WiFi module
-#endif
-
 /**
  * TFT Rotation. Set to one of the following values:
  *
@@ -3694,14 +3695,6 @@
 // EasyThreeD ET-4000+ with button input and status LED
 //
 //#define EASYTHREED_UI
-
-//
-// PanelDue touch controller by Duet3D (PanelDueFirmware 3.2 or newer)
-// https://docs.duet3d.com/User_manual/Connecting_hardware/Display_PanelDue
-// Connect the PanelDue to a free UART and define LCD_SERIAL_PORT with its index.
-// The PanelDue baud rate must be set to 57600, or define LCD_BAUDRATE to match.
-//
-//#define PANELDUE
 
 //=============================================================================
 //=============================== Extra Features ==============================
