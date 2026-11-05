@@ -2101,7 +2101,7 @@
 
   // Maximum number of consecutive SD card read errors before aborting the print
   // Prevents infinite loops when reading from SD card with hardware/communication faults
-  #define SD_MAX_READ_ERRORS 5
+  #define SD_MAX_READ_ERRORS 20
 
 #endif // HAS_MEDIA
 
