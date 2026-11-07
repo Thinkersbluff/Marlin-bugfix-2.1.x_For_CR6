@@ -2101,7 +2101,7 @@
 
   // Maximum number of consecutive SD card read errors before aborting the print
   // Prevents infinite loops when reading from SD card with hardware/communication faults
-  #define SD_MAX_READ_ERRORS 20
+  #define SD_MAX_READ_ERRORS 5
 
 #endif // HAS_MEDIA
 
@@ -2109,7 +2109,7 @@
  * By default an onboard SD card reader may be shared as a USB mass-
  * storage device. This option hides the SD card from the host PC.
  */
-//#define NO_SD_HOST_DRIVE   // Disable SD Card access over USB (for security).
+#define NO_SD_HOST_DRIVE   // Disable SD Card access over USB (for security).
 
 /**
  * Additional options for Graphical Displays
@@ -2909,7 +2909,7 @@
  * Support is currently limited to some STM32 MCUs and all HC32 MCUs.
  * Note: This has no effect on emulated USB serial ports.
  */
-//#define SERIAL_DMA
+#define SERIAL_DMA
 
 /**
  * Set the number of proportional font spaces required to fill up a typical character space.
