@@ -2,6 +2,13 @@
 
 - Thinkyhead is controlling the actual CR6-SE integration project and is making pre-compiled firmwares for stock-configuration CR6-SE printers available for testing at [https://github.com/MarlinFirmware/Marlin/pull/19958](https://github.com/MarlinFirmware/Marlin/pull/19958#issuecomment-6404508230).
 
+- The source code from which those files are built is available at this branch of Thinkyhead/Marlin: https://github.com/thinkyhead/Marlin/tree/bf2_creality_CR-6_SE_PR
+- The configuration file examples from which those bin files are being compiled are available here:
+ •	V4.5.2: https://github.com/thinkyhead/Configurations/tree/651df1a524c4/config/examples/Creality/CR-6%20SE/CrealityV452
+ •	V4.5.3: the same files with MOTHERBOARD BOARD_CREALITY_V453.
+ •	SKR CR6 with the stock screen: https://github.com/thinkyhead/Configurations/tree/651df1a524c4/config/examples/Creality/CR-6%20SE/BigTreeTech%20SKR%20CR6 with ENDSTOP_NOISE_THRESHOLD 2 enabled.
+
+
 **CAUTION:**
 - The Marlin/Configuration.h, Marlin/Configuration_adv.h and platformio.ini files in the root of this fork are specifically tailored by Thinkersbluff to run on Thinkersbluff's own customized CR6-SE.  They may help to inspire and inform your own efforts to tailor those files to your own non-stock CR6 machines, but they are not likely to work with your machines as-is.
 - Issues and Discussions on this repository are Thinkersbluff's way of keeping his own head clear as to what has been discovered during the testing that may require feedback to the upstream team or may lead to future customizations of the CR6 DWIN_SET.  Nothing on this repo represents any opinion or commitment by Thinkyhead or the upstream Marlin team.
