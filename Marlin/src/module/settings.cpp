@@ -59,6 +59,10 @@
   #include "../feature/mks_wifi/wifi_module.h"
 #endif
 
+#if ENABLED(CREALITY_RTS)
+  #include "../lcd/rts/lcd_rts.h"
+#endif
+
 #include "../lcd/marlinui.h"
 #include "../libs/vector_3.h"   // for matrix_3x3
 #include "../gcode/gcode.h"
@@ -746,6 +750,14 @@ typedef struct SettingsDataStruct {
     mks_wifi_settings_t mks_wifi_settings;              // M587 S P
   #endif
 
+  //
+  // Creality RTS
+  //
+  #if ENABLED(CREALITY_RTS)
+    bool wifi_enable_flag;        // M194 S
+    bool rts_sound_on;            // Screen sound button
+  #endif
+
 } SettingsData;
 
 //static_assert(sizeof(SettingsData) <= MARLIN_EEPROM_SIZE, "EEPROM too small to contain SettingsData!");
@@ -754,7 +766,7 @@ MarlinSettings settings;
 
 uint16_t MarlinSettings::datasize() { return sizeof(SettingsData); }
 
-#ifdef EEPROM_AUTOSAVE_AFTER
+#if EEPROM_AUTOSAVE_AFTER > 0
 
   static millis_t autosave_ms; // = 0 (no save pending)
 
@@ -925,7 +937,7 @@ void MarlinSettings::postprocess() {
 
   bool MarlinSettings::validating;
   int MarlinSettings::eeprom_index;
-  uint16_t MarlinSettings::working_crc;
+  uint16_t MarlinSettings::working_crc, MarlinSettings::last_crc_value;
 
   EEPROM_Error MarlinSettings::size_error(const uint16_t size) {
     if (size != datasize()) {
@@ -1846,6 +1858,12 @@ void MarlinSettings::postprocess() {
       EEPROM_WRITE(ui.language);
     #endif
 
+    #if ENABLED(CREALITY_RTS)
+      _FIELD_TEST(wifi_enable_flag);
+      EEPROM_WRITE(wifi_enable_flag);
+      EEPROM_WRITE(rts_sound_on);
+    #endif
+
     //
     // Model predictive control
     //
@@ -1941,6 +1959,8 @@ void MarlinSettings::postprocess() {
         EEPROM_WRITE(build_hash);
       #endif
       EEPROM_WRITE(final_crc);
+
+      last_crc_value = final_crc;
 
       // Report storage size
       DEBUG_ECHO_MSG("Settings Stored (", eeprom_size, " bytes; crc ", (uint32_t)final_crc, ")");
@@ -3024,6 +3044,12 @@ void MarlinSettings::postprocess() {
       }
       #endif
 
+      #if ENABLED(CREALITY_RTS)
+        _FIELD_TEST(wifi_enable_flag);
+        EEPROM_READ(wifi_enable_flag);
+        EEPROM_READ(rts_sound_on);
+      #endif
+
       //
       // Model predictive control
       //
@@ -3163,6 +3189,7 @@ void MarlinSettings::postprocess() {
         break;
       }
       else if (!validating) {
+        last_crc_value = working_crc;
         DEBUG_ECHO_START();
         DEBUG_ECHOLN(version_str, F(" stored settings retrieved ("), eeprom_total, F(" bytes; crc "), working_crc, C(')'));
         TERN_(HOST_EEPROM_CHITCHAT, hostui.notify(F("Stored settings retrieved")));
@@ -3912,6 +3939,12 @@ void MarlinSettings::reset() {
       stepper.set_digipot_current(q, tmp_motor_current_setting[q]);
   #endif
 
+  #if ENABLED(CREALITY_RTS)
+    ui.language = 1; // 0:Chinese, 1:English
+    wifi_enable_flag = true;
+    rts_sound_on = true;
+  #endif
+
   //
   // Adaptive Step Smoothing state
   //
@@ -4373,6 +4406,13 @@ void MarlinSettings::reset() {
     // MMU3
     //
     TERN_(HAS_PRUSA_MMU3, gcode.MMU3_report(forReplay));
+
+    #if ENABLED(CREALITY_RTS)
+      CONFIG_ECHO_HEADING("WIFI Enabled");
+      CONFIG_ECHO_MSG("  M194 S", wifi_enable_flag);
+      CONFIG_ECHO_HEADING("Screen Sound (set with the screen's sound button)");
+      CONFIG_ECHO_MSG("  ; ", rts_sound_on ? F("on") : F("off"));
+    #endif
   }
 
 #endif // !DISABLE_M503

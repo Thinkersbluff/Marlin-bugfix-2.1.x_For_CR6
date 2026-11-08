@@ -3019,8 +3019,8 @@ static_assert(NUM_SERVOS <= NUM_SERVO_PLUGS, "NUM_SERVOS (or some servo index) i
 /**
  * EEPROM autosave needs a positive delay
  */
-#if defined(EEPROM_AUTOSAVE_AFTER) && !(EEPROM_AUTOSAVE_AFTER > 0)
-  #error "EEPROM_AUTOSAVE_AFTER must be a delay in milliseconds greater than 0."
+#if defined(EEPROM_AUTOSAVE_AFTER) && EEPROM_AUTOSAVE_AFTER <= 0
+  #error "EEPROM_AUTOSAVE_AFTER must be greater than 0 milliseconds."
 #endif
 
 /**
@@ -3117,6 +3117,13 @@ static_assert(NUM_SERVOS <= NUM_SERVO_PLUGS, "NUM_SERVOS (or some servo index) i
   #elif !HAS_MEDIA
     #error "TFT_LVGL_UI requires SDSUPPORT."
   #endif
+#endif
+
+/**
+ * Creality WiFi box options are part of the RTS screen support
+ */
+#if ANY(CREALITY_WIFI, MENU_RESET_WIFI) && DISABLED(CREALITY_RTS)
+  #error "CREALITY_WIFI and MENU_RESET_WIFI require CREALITY_RTS."
 #endif
 
 /**
@@ -4171,6 +4178,8 @@ static_assert(_PLUS_TEST(3), "DEFAULT_MAX_ACCELERATION values must be positive."
   #error "USB_CS_PIN and USB_INTR_PIN (or USE_OTG_USB_HOST) are required for USB_FLASH_DRIVE_SUPPORT."
 #elif ENABLED(USE_OTG_USB_HOST) && DISABLED(HAS_OTG_USB_HOST_SUPPORT)
   #error "The current board does not support USE_OTG_USB_HOST."
+#elif ENABLED(USE_OTG_USB_HOST) && !defined(USBHOST)
+  #error "USE_OTG_USB_HOST requires a '..._usb_flash_drive' PlatformIO environment."
 #endif
 
 #if ENABLED(SD_FIRMWARE_UPDATE) && !defined(__AVR_ATmega2560__)

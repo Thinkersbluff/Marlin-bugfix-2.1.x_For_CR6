@@ -2535,9 +2535,9 @@
 //#define EEPROM_CHITCHAT     // Give feedback on EEPROM commands. Disable to save flash.
 #define EEPROM_BOOT_SILENT    // Keep M503 quiet and only give errors during first load
 #if ENABLED(EEPROM_SETTINGS)
-  #define EEPROM_AUTO_INIT    // Init EEPROM automatically on any errors.
-  //#define EEPROM_INIT_NOW   // Init EEPROM on first boot after a new build.
-  #define EEPROM_AUTOSAVE_AFTER 5000  // (ms) Save settings this long after they're edited on a supporting LCD, once not printing.
+  //#define EEPROM_AUTO_INIT            // Init EEPROM automatically on any errors.
+  //#define EEPROM_INIT_NOW             // Init EEPROM on first boot after a new build.
+  //#define EEPROM_AUTOSAVE_AFTER 5000  // (ms) Save settings this long after they're edited on a supporting LCD, once not printing.
 #endif
 
 // @section host
@@ -3434,6 +3434,16 @@
 // Sovol SV-06 Resistive Touch Screen
 //
 //#define SOVOL_SV06_RTS
+
+//
+// Creality Resistive Touch Screen
+// As found in the Creality CR-6 S1
+//
+//#define CREALITY_RTS
+#if ENABLED(CREALITY_RTS)
+  //#define CREALITY_WIFI      // Creality WiFi module
+  //#define MENU_RESET_WIFI    // The controller has a menu to reset WiFi with RESET_WIFI_PIN
+#endif
 
 //
 // 320x240 Nextion 2.8" serial TFT Resistive Touch Screen NX3224T028
