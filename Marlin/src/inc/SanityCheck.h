@@ -221,9 +221,9 @@ static_assert(COUNT(arm) == LOGICAL_AXES, "AXIS_RELATIVE_MODES must contain " _L
   #error "SERIAL_XON_XOFF and SERIAL_STATS_* features not supported on USB-native AVR devices."
 #endif
 
-// Serial DMA is only available for some STM32 MCUs, HC32 and GD32
+// Serial DMA is only available for some STM32 MCUs, HC32, GD32 and AT32
 #if ENABLED(SERIAL_DMA)
-  #if ANY(ARDUINO_ARCH_HC32, ARDUINO_ARCH_MFL)
+  #if ANY(ARDUINO_ARCH_HC32, ARDUINO_ARCH_MFL, ARDUINO_ARCH_AT32)
     // See HAL/.../inc/SanityCheck.h
   #elif DISABLED(HAL_STM32) || NONE(STM32F0xx, STM32F1xx, STM32F2xx, STM32F4xx, STM32F7xx, STM32H7xx)
     #error "SERIAL_DMA is only available for some STM32 MCUs and requires HAL/STM32."
@@ -1291,6 +1291,8 @@ static_assert(NUM_SERVOS <= NUM_SERVO_PLUGS, "NUM_SERVOS (or some servo index) i
       #error "DELTA requires GRID_MAX_POINTS_X and GRID_MAX_POINTS_Y to be 3 or higher."
     #endif
   #endif
+  static_assert(X_MIN_POS < 0 && Y_MIN_POS < 0 && X_MAX_POS > 0 && Y_MAX_POS > 0,
+    "DELTA requires the bed center at X0 Y0. Set [XY]_MIN_POS to -(PRINTABLE_RADIUS) and [XY]_MAX_POS to PRINTABLE_RADIUS.");
 #endif
 
 /**
@@ -3981,6 +3983,13 @@ constexpr float sanity_arr_3[] = DEFAULT_MAX_ACCELERATION;
 static_assert(COUNT(sanity_arr_3) >= LOGICAL_AXES,  "DEFAULT_MAX_ACCELERATION requires " _LOGICAL_AXES_STR "elements.");
 static_assert(COUNT(sanity_arr_3) <= DISTINCT_AXES, "DEFAULT_MAX_ACCELERATION has too many elements." _EXTRA_NOTE);
 static_assert(_PLUS_TEST(3), "DEFAULT_MAX_ACCELERATION values must be positive.");
+
+#if ENABLED(DELTA)
+  #define _XYZ_SAME_TEST(A) (sanity_arr_##A[X_AXIS] == sanity_arr_##A[Y_AXIS] && sanity_arr_##A[X_AXIS] == sanity_arr_##A[Z_AXIS])
+  static_assert(_XYZ_SAME_TEST(2), "DELTA requires the same DEFAULT_MAX_FEEDRATE for X, Y, and Z.");
+  static_assert(_XYZ_SAME_TEST(3), "DELTA requires the same DEFAULT_MAX_ACCELERATION for X, Y, and Z.");
+  #undef _XYZ_SAME_TEST
+#endif
 
 #if MAXIMUM_STEPPER_RATE
   #define _RATE_ASSERT(A) static_assert(sanity_arr_1[_AXIS(A)] * sanity_arr_2[_AXIS(A)] <= MAXIMUM_STEPPER_RATE, \
