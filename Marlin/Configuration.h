@@ -1835,7 +1835,7 @@
 #define PROBE_OFFSET_ZMAX    10   // (mm)
 
 // Enable the M48 repeatability test to test probe accuracy
-//#define Z_MIN_PROBE_REPEATABILITY_TEST
+#define Z_MIN_PROBE_REPEATABILITY_TEST
 
 // Before deploy/stow pause for user confirmation
 //#define PAUSE_BEFORE_DEPLOY_STOW
@@ -2228,7 +2228,7 @@
 #if ENABLED(PREHEAT_BEFORE_LEVELING)
   #define LEVELING_NOZZLE_TEMP     145   // (°C) Only applies to E0 at this time
   #define LEVELING_BED_TEMP         60
-  //#define LEVELING_HEAT_SOAK_TIME 60   // (s) Time to wait for heat soak after heaters reach temperature
+  #define LEVELING_HEAT_SOAK_TIME  60   // (s) Time to wait for heat soak after heaters reach temperature
 #endif
 
 /**
