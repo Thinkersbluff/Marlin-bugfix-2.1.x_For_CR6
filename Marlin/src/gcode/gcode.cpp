@@ -1129,6 +1129,10 @@ void GcodeSuite::process_parsed_command(bool no_ok/*=false*/) {
         case 951: M951(); break;                                  // M951: Set Magnetic Parking Extruder parameters
       #endif
 
+      #if ENABLED(CAN_BUS)
+        case 960: M960(); break;                                  // M960: CAN bus state and node discovery
+      #endif
+
       #if ENABLED(Z_STEPPER_AUTO_ALIGN)
         case 422: M422(); break;                                  // M422: Set Z Stepper automatic alignment position using probe
       #endif
@@ -1159,6 +1163,10 @@ void GcodeSuite::process_parsed_command(bool no_ok/*=false*/) {
       #endif
 
       case 999: M999(); break;                                    // M999: Restart after being Stopped
+
+      #if ENABLED(CREALITY_BOOTLOADER_INFO_DUMP)
+        case 7422: M7422(); break;                                // M7422: Dump the Creality v4.2.x bootloader info page
+      #endif
 
       #if ENABLED(POWER_LOSS_RECOVERY)
         case 413: M413(); break;                                  // M413: Enable/disable/query Power-Loss Recovery

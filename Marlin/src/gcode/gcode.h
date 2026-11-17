@@ -338,6 +338,7 @@
  * M920 - Set Homing Current. (Requires distinct *_CURRENT_HOME settings)
  * M936 - OTA update firmware. (Requires OTA_FIRMWARE_UPDATE)
  * M951 - Set Magnetic Parking Extruder parameters. (Requires MAGNETIC_PARKING_EXTRUDER)
+ * M960 - Report CAN bus state. List CAN nodes running Klipper or Katapult. (Requires CAN_BUS)
  * M3426 - Read MCP3426 ADC over I2C. (Requires HAS_MCP3426_ADC)
  * M7219 - Control Max7219 Matrix LEDs. (Requires MAX7219_GCODE)
  *
@@ -356,6 +357,7 @@
  * M995 - Touch screen calibration for TFT display
  * M997 - Perform in-application firmware update
  * M999 - Restart after being stopped by error
+ * M7422 - Dump the Creality v4.2.x bootloader info page. (Requires CREALITY_BOOTLOADER_INFO_DUMP)
  *
  * D... - Custom Development G-code. Add hooks to "gcode_D.cpp" for developers to test features. (Requires MARLIN_DEV_MODE)
  *        D576 - Set buffer monitoring options. (Requires BUFFER_MONITORING)
@@ -1360,6 +1362,10 @@ private:
     static void M951();
   #endif
 
+  #if ENABLED(CAN_BUS)
+    static void M960();
+  #endif
+
   #if ENABLED(TOUCH_SCREEN_CALIBRATION)
     static void M995();
   #endif
@@ -1367,6 +1373,10 @@ private:
   #if SPI_FLASH_BACKUP
     static void M993();
     static void M994();
+  #endif
+
+  #if ENABLED(CREALITY_BOOTLOADER_INFO_DUMP)
+    static void M7422();
   #endif
 
   #if ENABLED(PLATFORM_M997_SUPPORT)
